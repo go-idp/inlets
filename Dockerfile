@@ -1,28 +1,31 @@
 # Builder
-FROM registry.idp.zcorky.com/whatwewant/builder-go:v1.22-1 as builder
+FROM --platform=$BUILDPLATFORM whatwewant/builder-go:v1.22-1 as builder
 
 WORKDIR /build
 
-COPY go.mod .
+COPY go.mod ./
 
-COPY go.sum .
-
-ENV GOPROXY=https://goproxy.cn,direct
+COPY go.sum ./
 
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -v -o inlets cmd/inlets
+RUN CGO_ENABLED=0 \
+  GOOS=$TARGETOS \
+  GOARCH=$TARGETARCH \
+  go build \
+  -trimpath \
+  -ldflags '-w -s -buildid=' \
+  -v -o inlets ./cmd/inlets
 
-FROM registry.idp.zcorky.com/whatwewant/alpine:v3.17-1
+# Server
+FROM whatwewant/alpine:v3-1
 
-ARG VERSION=v1
+LABEL MAINTAINER="Zero<tobewhatwewant@gmail.com>"
 
-ENV VERSION=${VERSION}
+LABEL org.opencontainers.image.source="https://github.com/go-idp/inlets"
 
 COPY --from=builder /build/inlets /bin
-
-EXPOSE 8080
 
 CMD inlets server
