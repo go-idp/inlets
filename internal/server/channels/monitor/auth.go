@@ -1,0 +1,353 @@
+package monitor
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-zoox/inlets/internal/client"
+	"github.com/go-zoox/inlets/internal/server/protocol"
+	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-zoox/inlets/internal/server/utils"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+)
+
+// handleAuthenticate handles authentication
+func handleAuthenticate(
+	ctx *types.Context,
+	options *CreateWebSocketOptions,
+	emitter *EventEmitter,
+	wsConn *WebSocketConnection,
+	payload interface{},
+	isAuthenticated *bool,
+	subDomain *string,
+) error {
+	// Parse authentication payload
+	authBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	var auth client.Authentication
+	if err := json.Unmarshal(authBytes, &auth); err != nil {
+		return err
+	}
+
+	// Define clientId
+	clientId := auth.ClientId
+	if clientId == "" {
+		clientId = fmt.Sprintf("anonymous-%s", uuid.New().String()[:8])
+	}
+
+	log.Printf("[monitor:ws][%s] version: %s", clientId, auth.Version)
+
+	// Version check (warning only)
+	clientVersion := auth.Version
+	serverVersion := options.Version
+	if !utils.IsVersionGreaterOrEqual(clientVersion, serverVersion) {
+		log.Printf("[monitor:ws] Warning: client version(%s) should be >= server(%s)", clientVersion, serverVersion)
+		// Send warning
+		warnMsg := []interface{}{
+			"warn",
+			fmt.Sprintf("Warning: client version(%s) should be >= server(%s)", clientVersion, serverVersion),
+		}
+		warnBytes, _ := json.Marshal(warnMsg)
+		wsConn.writeMu.Lock()
+		wsConn.WriteMessage(websocket.TextMessage, warnBytes)
+		wsConn.writeMu.Unlock()
+	}
+
+	// Get token
+	authType := types.AuthType(auth.AuthType)
+	if authType == "" {
+		authType = types.AuthTypeToken
+	}
+
+	tokenOptions := &types.GetTokenOptions{
+		Type: types.TunnelType(auth.Type),
+	}
+
+	tokenRes, err := options.Token(authType, auth.ClientId, tokenOptions)
+	if err != nil {
+		sendAuthResponse(wsConn, options, false, fmt.Sprintf("invalid client: %v", err), "", nil)
+		return err
+	}
+
+	// Check public auth type
+	if tokenRes.AuthType == types.AuthTypePublic && auth.SubDomain != "" {
+		sendAuthResponse(wsConn, options, false, "subDomain is not allowed for public authType", "", nil)
+		return fmt.Errorf("subDomain not allowed for public auth")
+	}
+
+	signedSecret := tokenRes.Token
+	if signedSecret == "" {
+		sendAuthResponse(wsConn, options, false, fmt.Sprintf("invalid client(%s)", authType), "", nil)
+		return fmt.Errorf("invalid token")
+	}
+
+	// Verify signature
+	expectedSignature := utils.HMACSHA512(strconv.FormatInt(auth.Timestamp, 10), signedSecret)
+	if expectedSignature != auth.Signature {
+		sendAuthResponse(wsConn, options, false, "invalid signature", "", nil)
+		return fmt.Errorf("invalid signature")
+	}
+
+	log.Printf("[monitor:ws][%s] type: %s", clientId, auth.Type)
+
+	// Capability negotiation
+	negotiatedCapabilities := negotiateCapabilities(auth.Capabilities)
+	useNewProtocol := negotiatedCapabilities != nil
+
+	protocolSummary := formatProtocolConfiguration(negotiatedCapabilities)
+	if useNewProtocol {
+		log.Printf("[monitor:ws][%s] Using new protocol", clientId)
+	} else {
+		log.Printf("[monitor:ws][%s] Using legacy protocol", clientId)
+	}
+	log.Printf("[monitor:ws][%s] protocol configuration => %s", clientId, protocolSummary)
+
+	// Save capabilities to connection
+	wsConn.mu.Lock()
+	wsConn.Capabilities = negotiatedCapabilities
+	wsConn.UseNewProtocol = useNewProtocol
+	wsConn.IsLegacyClient = isLegacyClient(&auth)
+	wsConn.mu.Unlock()
+
+	// Create protocol adapter
+	adapter := protocol.Create(wsConn.Conn, negotiatedCapabilities, false)
+	wsConn.mu.Lock()
+	wsConn.Adapter = adapter
+	wsConn.mu.Unlock()
+
+	// Create container
+	containerId := uuid.New().String()
+
+	// Handle tunnel type
+	if auth.Type == "tcp" {
+		if auth.TunnelPort != 0 {
+			log.Printf("[monitor:ws][%s] tunnel port: %d", clientId, auth.TunnelPort)
+		}
+
+		ctx.Container.Create(containerId, options.Token, wsConn.Conn, &auth, &wsConn.writeMu)
+
+		// Store adapter and protocol info in container
+		wsConn.mu.RLock()
+		adapter := wsConn.Adapter
+		useNewProtocol := wsConn.UseNewProtocol
+		wsConn.mu.RUnlock()
+
+		if err := ctx.Container.Set(containerId, "adapter", adapter); err != nil {
+			log.Printf("[monitor:ws] Failed to set adapter in container: %v", err)
+		}
+		if err := ctx.Container.Set(containerId, "useNewProtocol", useNewProtocol); err != nil {
+			log.Printf("[monitor:ws] Failed to set useNewProtocol in container: %v", err)
+		}
+
+	} else if auth.Type == "http" {
+		// HTTP tunnel
+		wsConn.mu.RLock()
+		adapter := wsConn.Adapter
+		useNewProtocol := wsConn.UseNewProtocol
+		wsConn.mu.RUnlock()
+
+		if domainContainer, ok := ctx.DomainMappings.(interface {
+			BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool) string
+		}); ok {
+			if auth.SubDomain == "" {
+				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, "", clientId, adapter, useNewProtocol)
+			} else {
+				log.Printf("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
+
+				if ctx.DomainMappings.Has(auth.SubDomain) {
+					sendAuthResponse(wsConn, options, false, "domain id has been used, please use another", "", nil)
+					return fmt.Errorf("subdomain already used")
+				}
+
+				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, auth.SubDomain, clientId, adapter, useNewProtocol)
+			}
+		} else {
+			if auth.SubDomain == "" {
+				*subDomain = ctx.DomainMappings.BindWS(wsConn.Conn, "")
+			} else {
+				log.Printf("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
+
+				if ctx.DomainMappings.Has(auth.SubDomain) {
+					sendAuthResponse(wsConn, options, false, "domain id has been used, please use another", "", nil)
+					return fmt.Errorf("subdomain already used")
+				}
+
+				*subDomain = ctx.DomainMappings.BindWS(wsConn.Conn, auth.SubDomain)
+			}
+		}
+
+		log.Printf("[monitor:ws][%s][domain] %s.%s", clientId, *subDomain, options.Domain)
+	} else {
+		return fmt.Errorf("unknown authentication type: %s", auth.Type)
+	}
+
+	// Set connection metadata
+	wsConn.mu.Lock()
+	wsConn.ContainerID = containerId
+	wsConn.ClientID = clientId
+	wsConn.mu.Unlock()
+
+	// Build server config
+	config := &client.Config{
+		Version:                options.Version,
+		NegotiatedCapabilities: negotiatedCapabilities,
+	}
+
+	// Merge client config if exists
+	if tokenRes.Config != nil {
+		config.Notification = tokenRes.Config.Notification
+	}
+
+	// Send authentication success response
+	url := getServerUrlBySubDomain(*subDomain, options)
+	sendAuthResponse(wsConn, options, true, "", url, config)
+
+	log.Printf("[monitor:ws][%s] authenticated successfully (container: %s)", clientId, containerId)
+
+	// Set start time for traffic stats
+	ctx.TrafficStats.SetStartTime(clientId)
+
+	// Setup new protocol response handler
+	if useNewProtocol {
+		adapter.OnHTTPResponse(func(id string, data []byte) error {
+			parts := strings.Split(id, ":")
+			if len(parts) >= 2 {
+				tcpId := parts[0]
+				requestId := strings.Join(parts[1:], ":")
+				callback := ctx.CallbackContainer.Get(tcpId, requestId)
+				if callback != nil {
+					callback(base64Encode(data))
+				}
+			}
+			return nil
+		})
+	}
+
+	// Send notification (async to avoid blocking message loop)
+	if options.Notification != nil {
+		go func() {
+			options.Notification.Notify(fmt.Sprintf("[上线] 客户端 - %s", clientId), []string{
+				fmt.Sprintf("客户端版本：%s", auth.Version),
+				fmt.Sprintf("客户端类型：%s", auth.Type),
+				fmt.Sprintf("客户端授权方式：%s", auth.AuthType),
+				fmt.Sprintf("客户端端口：%d", auth.TunnelPort),
+				fmt.Sprintf("当前时间：%s", time.Now().Format("2006-01-02 15:04:05")),
+			})
+		}()
+	}
+
+	// Emit tunnel event (async to avoid blocking)
+	go func() {
+		emitter.Emit("tunnel", map[string]interface{}{
+			"type":        auth.Type,
+			"containerId": containerId,
+		})
+	}()
+
+	return nil
+}
+
+// handleResponse handles HTTP response from client
+func handleResponse(ctx *types.Context, wsConn *WebSocketConnection, payload interface{}) {
+	wsConn.mu.RLock()
+	adapter := wsConn.Adapter
+	useNewProtocol := wsConn.UseNewProtocol
+	wsConn.mu.RUnlock()
+
+	if useNewProtocol && adapter != nil {
+		// New protocol: response is already handled in adapter
+		return
+	}
+
+	// Legacy protocol: handle response
+	responseBytes, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	var responseData struct {
+		ID   string `json:"id"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(responseBytes, &responseData); err != nil {
+		return
+	}
+
+	parts := strings.Split(responseData.ID, ":")
+	if len(parts) >= 2 {
+		tcpId := parts[0]
+		requestId := strings.Join(parts[1:], ":")
+		callback := ctx.CallbackContainer.Get(tcpId, requestId)
+		if callback != nil {
+			// Decode base64 response
+			decoded, err := base64Decode(responseData.Data)
+			if err == nil {
+				callback(decoded)
+			}
+		}
+	}
+}
+
+// handleDisconnect handles client disconnect
+func handleDisconnect(ctx *types.Context, options *CreateWebSocketOptions, wsConn *WebSocketConnection, subDomain string, clientId string) {
+	wsConn.mu.RLock()
+	containerId := wsConn.ContainerID
+	wsConn.mu.RUnlock()
+
+	// Set end time for traffic stats
+	ctx.TrafficStats.SetEndTime(clientId)
+
+	// Get stats
+	statsInfo := ctx.TrafficStats.FormatStats(clientId)
+	log.Printf("[monitor:ws][%s] disconnected - Traffic Stats: %s", clientId, statsInfo)
+
+	// Unbind domain mapping
+	if subDomain != "" {
+		ctx.DomainMappings.UnbindWS(subDomain)
+	}
+
+	// Get container for notification
+	container := ctx.Container.Get(containerId)
+	if container == nil {
+		log.Printf("[monitor:ws] Cannot get container id: %s", containerId)
+		return
+	}
+
+	// Send notification
+	if options.Notification != nil {
+		options.Notification.Notify(fmt.Sprintf("[掉线] 客户端 - %s", clientId), []string{
+			fmt.Sprintf("客户端版本：%s", container.Version),
+			fmt.Sprintf("客户端类型：%s", container.Type),
+			fmt.Sprintf("客户端授权方式：%s", container.AuthType),
+			fmt.Sprintf("客户端端口：%d", func() int {
+				if container.TunnelPort != nil {
+					return *container.TunnelPort
+				}
+				return 0
+			}()),
+			fmt.Sprintf("流量统计：%s", statsInfo),
+			fmt.Sprintf("当前时间：%s", time.Now().Format("2006-01-02 15:04:05")),
+		})
+	}
+
+	// Cleanup adapter
+	wsConn.mu.RLock()
+	if wsConn.Adapter != nil {
+		wsConn.Adapter.Destroy()
+	}
+	wsConn.mu.RUnlock()
+
+	// Cleanup container (this will close TCP server and release port)
+	if container.Destroy != nil {
+		container.Destroy()
+		log.Printf("[monitor:ws][%s] Container destroyed, TCP server closed and port released", clientId)
+	}
+}

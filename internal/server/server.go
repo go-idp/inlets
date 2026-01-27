@@ -1,0 +1,315 @@
+package server
+
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/go-zoox/inlets/internal/client"
+	datachannel "github.com/go-zoox/inlets/internal/server/channels/data"
+	monitorchannel "github.com/go-zoox/inlets/internal/server/channels/monitor"
+	servercontainer "github.com/go-zoox/inlets/internal/server/container"
+	"github.com/go-zoox/inlets/internal/server/limiter"
+	"github.com/go-zoox/inlets/internal/server/stats"
+	"github.com/go-zoox/inlets/internal/server/tunnel"
+	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-zoox/inlets/internal/server/utils"
+)
+
+// Options contains options for creating a server
+type Options struct {
+	Version         string
+	Domain          string
+	Port            int
+	TCPPort         int
+	Secure          bool
+	Token           types.GetToken
+	Notification    *client.NotificationConfig
+	BandwidthLimits *limiter.ClientBandwidthLimits
+}
+
+// Server represents the main server instance
+type Server struct {
+	ctx          *types.Context
+	httpServer   *http.Server
+	wsMonitor    *WebSocketMonitor
+	tcpMonitor   *datachannel.TCPMonitor
+	httpTunnel   *tunnel.HTTPTunnel
+	tcpTunnel    *tunnel.TCPTunnel
+	notification *monitorchannel.Notification
+}
+
+// WebSocketMonitor manages WebSocket connections and authentication
+type WebSocketMonitor struct {
+	ctx            *types.Context
+	options        *monitorchannel.CreateWebSocketOptions
+	monitorHandler *monitorchannel.MonitorChannelHandler
+	dataHandler    *datachannel.WebSocketDataChannelHandler
+	emitter        *monitorchannel.EventEmitter
+}
+
+// CreateWebSocketMonitor creates a new WebSocket monitor
+func CreateWebSocketMonitor(ctx *types.Context, options *monitorchannel.CreateWebSocketOptions) *WebSocketMonitor {
+	emitter := monitorchannel.NewEventEmitter()
+	monitorHandler := monitorchannel.NewMonitorChannelHandler(ctx, options, emitter)
+	dataHandler := datachannel.NewDataChannelHandler(ctx)
+
+	return &WebSocketMonitor{
+		ctx:            ctx,
+		options:        options,
+		monitorHandler: monitorHandler,
+		dataHandler:    dataHandler,
+		emitter:        emitter,
+	}
+}
+
+// Attach attaches the WebSocket monitor to an HTTP server
+func (m *WebSocketMonitor) Attach(server *http.Server) {
+	// Legacy protocol: single connection at /_client (handles all messages)
+	http.HandleFunc(m.ctx.Config.WSPath, m.monitorHandler.HandleConnectionLegacy)
+
+	// New protocol: separated channels
+	// Monitor channel: ping/pong, auth, control messages
+	http.HandleFunc(m.ctx.Config.WSMonitorPath, m.monitorHandler.HandleConnection)
+	// Data channel: tcp:data only
+	http.HandleFunc(m.ctx.Config.WSDataPath, m.dataHandler.HandleConnection)
+}
+
+// OnTunnel registers a handler for tunnel events
+func (m *WebSocketMonitor) OnTunnel(handler func(data map[string]interface{})) {
+	m.emitter.On("tunnel", func(data interface{}) {
+		if dataMap, ok := data.(map[string]interface{}); ok {
+			handler(dataMap)
+		}
+	})
+}
+
+// New creates and initializes a new server instance
+func New(options Options) (*Server, error) {
+	// Get or allocate ports
+	port := options.Port
+	if port == 0 {
+		var err error
+		port, err = utils.GetAvailablePort()
+		if err != nil {
+			return nil, fmt.Errorf("failed to allocate HTTP port: %v", err)
+		}
+	}
+
+	tcpPort := options.TCPPort
+	if tcpPort == 0 {
+		var err error
+		tcpPort, err = utils.GetAvailablePort()
+		if err != nil {
+			return nil, fmt.Errorf("failed to allocate TCP port: %v", err)
+		}
+	}
+
+	// Initialize Context
+	ctx := &types.Context{
+		Config:            types.DefaultServerConfig(),
+		DomainMappings:    servercontainer.NewDomainContainer(),
+		CallbackContainer: servercontainer.NewCallbackContainer(),
+		Container:         servercontainer.NewTunnelContainer(),
+		TrafficStats:      stats.NewTrafficStatsContainer(),
+		BandwidthLimiter:  limiter.NewBandwidthLimiter(options.BandwidthLimits),
+	}
+
+	// Create notification service
+	notification := monitorchannel.NewNotification(options.Notification)
+
+	// Create WebSocket monitor
+	wsMonitor := CreateWebSocketMonitor(ctx, &monitorchannel.CreateWebSocketOptions{
+		Version:      options.Version,
+		Domain:       options.Domain,
+		Port:         port,
+		Secure:       options.Secure,
+		Token:        options.Token,
+		Notification: notification,
+	})
+
+	// Create TCP monitor
+	tcpMonitor, err := datachannel.NewDataChannelHandlerLegacy(ctx, &datachannel.CreateTCPMonitorOptions{
+		Version: options.Version,
+		Domain:  options.Domain,
+		Port:    tcpPort,
+		Token:   options.Token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TCP monitor: %v", err)
+	}
+
+	// Create HTTP tunnel
+	httpTunnel := tunnel.CreateHTTPTunnel(ctx, options.Domain)
+
+	// Create TCP tunnel
+	tcpTunnel := tunnel.CreateTCPTunnel(ctx)
+
+	// Create HTTP server
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: http.DefaultServeMux,
+	}
+
+	// IMPORTANT: Attach WebSocket monitor FIRST so it handles WebSocket upgrades
+	// before HTTP tunnel intercepts connections
+	wsMonitor.Attach(httpServer)
+
+	// Attach HTTP tunnel to HTTP server (this adds a catch-all handler)
+	// The HTTP tunnel handler will only process non-WebSocket requests
+	httpTunnel.Attach(httpServer)
+
+	// Add stats API endpoints
+	utils.SetupStatsAPI(ctx)
+
+	// Listen for tunnel events
+	wsMonitor.OnTunnel(func(data map[string]interface{}) {
+		tunnelType, ok := data["type"].(string)
+		if !ok {
+			return
+		}
+
+		containerID, ok := data["containerId"].(string)
+		if !ok {
+			return
+		}
+
+		log.Printf("[server] Tunnel event received: type=%s, containerId=%s", tunnelType, containerID)
+
+		if tunnelType == "tcp" {
+			// Create TCP tunnel server
+			log.Printf("[server] Creating TCP tunnel server for container: %s", containerID)
+			if err := tcpTunnel.CreateServer(tunnel.Options{
+				ContainerID: containerID,
+				Domain:      options.Domain,
+			}); err != nil {
+				log.Printf("[server] Failed to create TCP tunnel: %v", err)
+			} else {
+				log.Printf("[server] TCP tunnel server created successfully for container: %s", containerID)
+			}
+		} else if tunnelType == "http" {
+			// HTTP tunnel doesn't need a separate listener - it uses the main HTTP server
+			// The domain mapping is already set up in handleAuthenticate
+			log.Printf("[server] HTTP tunnel ready for container: %s (using main HTTP server on port %d)", containerID, port)
+		}
+	})
+
+	server := &Server{
+		ctx:          ctx,
+		httpServer:   httpServer,
+		wsMonitor:    wsMonitor,
+		tcpMonitor:   tcpMonitor,
+		httpTunnel:   httpTunnel,
+		tcpTunnel:    tcpTunnel,
+		notification: notification,
+	}
+
+	return server, nil
+}
+
+// Start starts the server
+func (s *Server) Start() error {
+	// Get machine IP
+	ip, err := utils.GetMachineIP()
+	if err != nil {
+		log.Printf("[server] Failed to get machine IP: %v", err)
+		ip = "未知"
+	}
+
+	// Start HTTP server in a goroutine
+	go func() {
+		log.Printf("[server] Starting HTTP server on port %s", s.httpServer.Addr)
+		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[server] HTTP server error: %v", err)
+		} else {
+			log.Printf("[server] HTTP server stopped")
+		}
+	}()
+
+	// Give the server a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify server is reachable by dialing instead of binding again
+	conn, err := net.DialTimeout("tcp", s.httpServer.Addr, 500*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("port %s not reachable after start: %v", s.httpServer.Addr, err)
+	}
+	conn.Close()
+	log.Printf("[server] Verified: Port %s is accepting connections", s.httpServer.Addr)
+
+	// Send notification
+	now := time.Now().Format("2006-01-02 15:04:05")
+	title := fmt.Sprintf("[服务端][启动] 成功 - %s", ip)
+	message := []string{
+		fmt.Sprintf("服务端版本：%s", s.ctx.Config.Version),
+		fmt.Sprintf("服务端IP: %s", ip),
+		fmt.Sprintf("当前时间：%s", now),
+	}
+	if err := s.notification.Notify(title, message); err != nil {
+		log.Printf("[server] Failed to send notification: %v", err)
+	}
+
+	log.Printf("[server] Server started successfully")
+	log.Printf("[server] HTTP server listening on %s", s.httpServer.Addr)
+	log.Printf("[server] TCP monitor listening on port %d", s.tcpMonitor.GetPort())
+
+	return nil
+}
+
+// UpdateConfig updates the server configuration dynamically
+func (s *Server) UpdateConfig(
+	getToken types.GetToken,
+	notificationConfig *client.NotificationConfig,
+	bandwidthLimits *limiter.ClientBandwidthLimits,
+) error {
+	// Update GetToken function in WebSocket monitor
+	if s.wsMonitor != nil && s.wsMonitor.options != nil {
+		s.wsMonitor.options.Token = getToken
+	}
+
+	// Update notification instance
+	if notificationConfig != nil {
+		s.notification = monitorchannel.NewNotification(notificationConfig)
+		// Update notification in WebSocket monitor options
+		if s.wsMonitor != nil && s.wsMonitor.options != nil {
+			s.wsMonitor.options.Notification = s.notification
+		}
+	} else {
+		s.notification = nil
+		if s.wsMonitor != nil && s.wsMonitor.options != nil {
+			s.wsMonitor.options.Notification = nil
+		}
+	}
+
+	// Update bandwidth limiter
+	if s.ctx != nil && s.ctx.BandwidthLimiter != nil {
+		if updater, ok := s.ctx.BandwidthLimiter.(interface {
+			UpdateLimits(*limiter.ClientBandwidthLimits)
+		}); ok {
+			updater.UpdateLimits(bandwidthLimits)
+		}
+	}
+
+	return nil
+}
+
+// Stop stops the server
+func (s *Server) Stop() error {
+	// Close HTTP server
+	if s.httpServer != nil {
+		if err := s.httpServer.Close(); err != nil {
+			log.Printf("[server] Error closing HTTP server: %v", err)
+		}
+	}
+
+	// Close TCP monitor
+	if s.tcpMonitor != nil {
+		if err := s.tcpMonitor.Close(); err != nil {
+			log.Printf("[server] Error closing TCP monitor: %v", err)
+		}
+	}
+
+	return nil
+}

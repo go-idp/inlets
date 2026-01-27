@@ -1,0 +1,212 @@
+package client
+
+import (
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	wsPath                     = "/_client"   // Legacy protocol path (single connection)
+	wsMonitorPath              = "/_/monitor" // New protocol monitor channel path
+	wsDataPath                 = "/_/data"    // New protocol data channel path
+	tunnelTCPFlag              = "3e55f8e5-021b-441c-8e3b-64e87ea5f263"
+	tunnelTCPOKFlag            = "3e55f8e5-021b-441c-8e3b-64e87ea5f263200\n"
+	defaultAuthTimeout         = 30 * time.Second
+	defaultReconnectTimeout    = 30 * time.Second
+	defaultPingInterval        = 15 * time.Second
+	defaultPingTimeout         = 20 * time.Second // Increased from 5s to 20s
+	defaultVersion             = "2.0.0"
+	defaultReconnectMaxRetries = 1000
+	defaultReconnectInterval   = 3 * time.Second
+)
+
+// CapabilityFlags represents protocol capability flags
+const (
+	CapabilityFlagBinaryProtocol = 1 << iota
+	CapabilityFlagCompression
+	CapabilityFlagStreaming
+	CapabilityFlagFlowControl
+	CapabilityFlagHTTPBinary
+	CapabilityFlagHTTPStreaming
+	CapabilityFlagTCPOverWS
+	CapabilityFlagTCPMultiplex
+)
+
+type Options struct {
+	Type                string
+	UpstreamHost        string
+	UpstreamPort        int
+	AuthType            string
+	Token               string
+	ClientId            string
+	ClientSecret        string
+	SubDomain           string
+	Port                int
+	Remote              string
+	RemoteTCPPort       int
+	HealthcheckInt      int
+	ReportURL           string
+	Version             string
+	ReconnectMaxRetries int           // Maximum number of reconnection retries, default 1000
+	ReconnectInterval   time.Duration // Interval between reconnection attempts, default 3s
+}
+
+type CompressionFeatures struct {
+	Algorithms []string `json:"algorithms"`
+	Preferred  string   `json:"preferred,omitempty"`
+}
+
+type ChunkSizeFeatures struct {
+	Min     int `json:"min"`
+	Max     int `json:"max"`
+	Default int `json:"default"`
+}
+
+type FlowControlFeatures struct {
+	WindowSize int `json:"windowSize"`
+}
+
+type CapabilityFeatures struct {
+	Compression *CompressionFeatures `json:"compression,omitempty"`
+	ChunkSize   *ChunkSizeFeatures   `json:"chunkSize,omitempty"`
+	FlowControl *FlowControlFeatures `json:"flowControl,omitempty"`
+}
+
+type Capabilities struct {
+	Flags    int                 `json:"flags"`
+	Version  string              `json:"version"`
+	Features *CapabilityFeatures `json:"features,omitempty"`
+}
+
+type Authentication struct {
+	Version      string        `json:"version"`
+	Type         string        `json:"type"`
+	Port         int           `json:"port"`
+	SubDomain    string        `json:"subDomain,omitempty"`
+	TunnelPort   int           `json:"tunnelPort,omitempty"`
+	Timestamp    int64         `json:"timestamp"`
+	AuthType     string        `json:"authType,omitempty"`
+	ClientId     string        `json:"clientId,omitempty"`
+	Signature    string        `json:"signature"`
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+}
+
+type AuthenticateResponse struct {
+	OK          bool    `json:"ok"`
+	Message     string  `json:"message,omitempty"`
+	Version     string  `json:"version,omitempty"`
+	URL         string  `json:"url,omitempty"`
+	Config      *Config `json:"config,omitempty"`
+	ClientId    string  `json:"clientId,omitempty"`    // Client ID from server
+	ContainerId string  `json:"containerId,omitempty"` // Container ID from server
+}
+
+type Config struct {
+	Version                string              `json:"version,omitempty"`
+	Notification           *NotificationConfig `json:"notification,omitempty"`
+	NegotiatedCapabilities *Capabilities       `json:"negotiatedCapabilities,omitempty"`
+}
+
+// compareVersion compares two version strings (e.g., "2.0.0" vs "1.9.0")
+// Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+func compareVersion(v1, v2 string) int {
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var num1, num2 int
+		if i < len(parts1) {
+			num1, _ = strconv.Atoi(parts1[i])
+		}
+		if i < len(parts2) {
+			num2, _ = strconv.Atoi(parts2[i])
+		}
+
+		if num1 < num2 {
+			return -1
+		} else if num1 > num2 {
+			return 1
+		}
+	}
+
+	return 0
+}
+
+// GetClientCapabilities returns the client capabilities based on version
+// For version 2.0.0+, returns full capabilities
+// For older versions, returns nil (legacy protocol)
+func GetClientCapabilities(version string) *Capabilities {
+	// For version 2.0.0+, send full capabilities
+	// For older versions, return nil (legacy protocol)
+	if compareVersion(version, "2.0.0") < 0 {
+		return nil
+	}
+
+	return &Capabilities{
+		Flags: CapabilityFlagBinaryProtocol |
+			CapabilityFlagCompression |
+			CapabilityFlagStreaming |
+			CapabilityFlagFlowControl |
+			CapabilityFlagHTTPBinary |
+			CapabilityFlagTCPOverWS,
+		Version: "2.0.0",
+		Features: &CapabilityFeatures{
+			Compression: &CompressionFeatures{
+				Algorithms: []string{"brotli", "gzip"},
+			},
+			ChunkSize: &ChunkSizeFeatures{
+				Min:     1024,
+				Max:     512 * 1024,
+				Default: 64 * 1024,
+			},
+			FlowControl: &FlowControlFeatures{
+				WindowSize: 512 * 1024,
+			},
+		},
+	}
+}
+
+type NotificationConfig struct {
+	Provider string       `json:"provider"`
+	URL      string       `json:"url"`
+	Interval int          `json:"interval,omitempty"`
+	Alert    *AlertConfig `json:"alert,omitempty"`
+}
+
+type AlertConfig struct {
+	Provider string `json:"provider"`
+	URL      string `json:"url"`
+	Interval int    `json:"interval,omitempty"`
+}
+
+type RequestData struct {
+	ID   string `json:"id"`
+	Data string `json:"data"`
+}
+
+type ResponseData struct {
+	ID   string `json:"id"`
+	Data string `json:"data"`
+}
+
+type TCPReadyData struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+type TCPConnectData struct {
+	ID        string `json:"id"`
+	RequestID string `json:"requestId"`
+	IP        string `json:"ip"`
+}
+
+type TCPData struct {
+	StreamID string `json:"streamId"`
+	Data     string `json:"data"`
+}

@@ -1,54 +1,28 @@
 # Builder
-FROM golang:1.18-alpine as builder
+FROM registry.idp.zcorky.com/whatwewant/builder-go:v1.22-1 as builder
 
-RUN         apk add --no-cache make git
+WORKDIR /build
 
-WORKDIR     /app
+COPY go.mod .
 
-COPY        go.mod ./
+COPY go.sum .
 
-COPY        go.sum ./
+ENV GOPROXY=https://goproxy.cn,direct
 
-RUN         go mod download
+RUN go mod download
 
-ARG         VERSION=unknown
+COPY . .
 
-ARG         BUILD_TIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -v -o inlets cmd/inlets
 
-ARG         COMMIT_HASH=unknown
+FROM registry.idp.zcorky.com/whatwewant/alpine:v3.17-1
 
-COPY        . ./
+ARG VERSION=v1
 
-RUN         CGO_ENABLED=0 \
-            GOOS=linux \
-            GOARCH=amd64 \
-            go build \
-              -trimpath \
-              -ldflags '\
-                -X "github.com/go-zoox/lighthouse/constants.Version=${VERSION}" \
-                -X "github.com/go-zoox/lighthouse/constants.BuildTime=${BUILD_TIME}" \
-                -X "github.com/go-zoox/lighthouse/constants.CommitHash=${COMMIT_HASH}" \
-                -w -s -buildid= \
-              ' \
-              -v -o lighthouse
+ENV VERSION=${VERSION}
 
-# Product
-FROM  scratch
+COPY --from=builder /build/inlets /bin
 
-LABEL       MAINTAINER="Zero<tobewhatwewant@gmail.com>"
+EXPOSE 8080
 
-LABEL       org.opencontainers.image.source="https://github.com/go-zoox/lighthouse"
-
-ARG         VERSION=v1.0.0
-
-COPY        --from=builder /app/lighthouse /
-
-COPY        conf/lighthouse.yaml /conf/lighthouse.yaml
-
-EXPOSE      53
-
-ENV         GIN_MODE=release
-
-ENV         VERSION=${VERSION}
-
-CMD  ["/lighthouse", "-c", "/conf/lighthouse.yaml"]
+CMD inlets server
