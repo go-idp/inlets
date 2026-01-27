@@ -1,0 +1,87 @@
+# Inlets Server Configuration Example
+# 
+# This is an example configuration file for the inlets server.
+# Place this file in one of the following locations (in priority order):
+#   1. ./.go-idp/inlets.yaml
+#   2. ./.inlets.yaml
+#   3. $HOME/.go-idp/inlets/config.yaml
+#   4. $HOME/.config/inlets.yaml
+#   5. $HOME/.config/inlets.yml
+#   6. /etc/go-idp/inlets/config.yaml
+#   7. /etc/inlets/config.yaml
+#
+# Or specify it with: inlets server -c /path/to/config.yaml
+
+# Server domain (required)
+domain: tunnel.example.com
+
+# HTTP server port (default: 8080)
+port: 8080
+
+# TCP server port (default: 8443)
+tcpPort: 8443
+
+# Enable HTTPS for URLs (default: true)
+secure: true
+
+# Authentication token (optional if clients are configured)
+# This is used for token-based authentication
+token: your-secret-token-here
+
+# Clients configuration (required)
+# Each client must have a unique clientId and clientSecret
+clients:
+  - clientId: client1
+    clientSecret: secret1
+    # Protocol version (optional, defaults to "2.0.0")
+    # Use "2.0.0" for new protocol with binary support, compression, etc.
+    # Use "1.2.0" or earlier for legacy protocol
+    config:
+      version: "2.0.0"  # Optional: defaults to "2.0.0" if not specified
+    # Per-client bandwidth limit (optional)
+    bandwidthLimit:
+      upload: 1024000    # 1MB/s in bytes per second
+      download: 1024000  # 1MB/s in bytes per second
+
+  - clientId: client2
+    clientSecret: secret2
+    # config section is optional - version defaults to "2.0.0"
+    # config:
+    #   version: "2.0.0"
+    bandwidthLimit:
+      upload: 2048000    # 2MB/s
+      download: 2048000  # 2MB/s
+
+  - clientId: client3
+    clientSecret: secret3
+    # No config section - version will default to "2.0.0"
+    # No bandwidth limit for this client (uses global or no limit)
+
+# Global bandwidth limits (optional)
+bandwidthLimits:
+  # Global limit applied to all clients
+  global:
+    upload: 512000      # 512KB/s
+    download: 512000    # 512KB/s
+  
+  # Per-client overrides (optional)
+  # These override the per-client bandwidthLimit in clients section
+  clients:
+    client1:
+      upload: 1024000
+      download: 1024000
+    client2:
+      upload: 2048000
+      download: 2048000
+
+# Notification configuration (optional)
+# Supports: dingtalk, feishu, wecom, slack
+notification:
+  provider: dingtalk
+  url: https://oapi.dingtalk.com/robot/send?access_token=YOUR_ACCESS_TOKEN
+  # Optional: notification interval in seconds
+  interval: 60
+  # Optional: alert configuration
+  alert:
+    provider: feishu
+    url: https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_URL

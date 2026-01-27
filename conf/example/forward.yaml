@@ -1,0 +1,67 @@
+# Inlets Forward Configuration Example
+#
+# NOTE: Currently, the inlets forward command uses command-line arguments for configuration.
+# This file serves as a reference for available options and their usage.
+#
+# Future versions may support YAML configuration files.
+#
+# The forward command creates a TCP port forwarding proxy.
+# It listens on a source address and forwards connections to a target address.
+#
+# Usage:
+#   inlets forward -s <source> -t <target>
+#   inlets forward --source <source> --target <target>
+#
+# Arguments:
+#   -s, --source    Source address to listen on (required)
+#                   Format: host:port or :port
+#                   Examples:
+#                     -s 0.0.0.0:8080    # Listen on all interfaces, port 8080
+#                     -s 127.0.0.1:8080  # Listen on localhost only, port 8080
+#                     -s :8080           # Listen on all interfaces, port 8080 (shorthand)
+#
+#   -t, --target    Target address to forward to (required)
+#                   Format: host:port
+#                   Examples:
+#                     -t 127.0.0.1:3000  # Forward to localhost:3000
+#                     -t 192.168.1.100:8080  # Forward to remote host
+#                     -t example.com:443     # Forward to remote domain
+#
+# Examples:
+#
+# Forward local port 8080 to local service on port 3000:
+#   inlets forward -s 0.0.0.0:8080 -t 127.0.0.1:3000
+#
+# Forward local port 3306 to remote database:
+#   inlets forward -s 0.0.0.0:3306 -t 192.168.1.100:3306
+#
+# Forward local port 8080 to remote service:
+#   inlets forward -s :8080 -t example.com:8080
+#
+# Forward local port 443 to local HTTPS service:
+#   inlets forward -s 0.0.0.0:443 -t 127.0.0.1:8443
+#
+# Use Cases:
+#
+# 1. Port Mapping:
+#    Map external port to internal service
+#    Example: inlets forward -s 0.0.0.0:80 -t 127.0.0.1:8080
+#
+# 2. Service Proxy:
+#    Proxy requests to a different host/port
+#    Example: inlets forward -s 0.0.0.0:8080 -t backend.example.com:8080
+#
+# 3. Development:
+#    Forward local development server to a different port
+#    Example: inlets forward -s 0.0.0.0:9000 -t 127.0.0.1:3000
+#
+# 4. Network Bridging:
+#    Bridge connections between different network segments
+#    Example: inlets forward -s 0.0.0.0:3306 -t 192.168.1.100:3306
+#
+# Notes:
+#   - The forward command creates a simple TCP proxy
+#   - It does not perform protocol inspection or modification
+#   - All TCP data is forwarded as-is between source and target
+#   - The connection is bidirectional (full-duplex)
+#   - Multiple concurrent connections are supported

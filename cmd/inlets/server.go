@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,6 +24,20 @@ import (
 const (
 	ServerVersion = "2.0.0"
 )
+
+// ConfigFilePaths defines the priority order of configuration file paths
+// Paths with placeholders will be resolved at runtime:
+// - {CWD} will be replaced with current working directory
+// - {HOME} will be replaced with user home directory
+var ConfigFilePaths = []string{
+	"{CWD}/.go-idp/inlets.yaml",
+	"{CWD}/.inlets.yaml",
+	"{HOME}/.go-idp/inlets/config.yaml",
+	"{HOME}/.config/inlets.yaml",
+	"{HOME}/.config/inlets.yml",
+	"/etc/go-idp/inlets/config.yaml",
+	"/etc/inlets/config.yaml",
+}
 
 // ServerConfig represents the server configuration from YAML file
 type ServerConfig struct {
@@ -60,12 +75,6 @@ func Server() *cli.Command {
   
     ▸ inlets server  <OPTIONS...>`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "domain",
-				Aliases: []string{"d"},
-				Usage:   "Domain for server",
-				EnvVars: []string{"DOMAIN"},
-			},
 			&cli.IntFlag{
 				Name:    "port",
 				Aliases: []string{"p"},
@@ -87,12 +96,6 @@ func Server() *cli.Command {
 				EnvVars: []string{"SERVER_TCP_PORT"},
 			},
 			&cli.StringFlag{
-				Name:    "token",
-				Aliases: []string{"t"},
-				Usage:   "Token for authentication",
-				EnvVars: []string{"TOKEN"},
-			},
-			&cli.StringFlag{
 				Name:    "config",
 				Aliases: []string{"c"},
 				Usage:   "Config file (default: $HOME/.config/inlets.yml)",
@@ -109,25 +112,29 @@ func Server() *cli.Command {
 			},
 		},
 		Action: func(c *cli.Context) error {
-			// Get default config path
-			defaultConfigPath := ""
-			if homeDir, err := os.UserHomeDir(); err == nil {
-				defaultConfigPath = filepath.Join(homeDir, ".config", "inlets.yml")
-			}
-
 			// Get config path
 			configPath := c.String("config")
+
+			// If config path is not specified, find it by priority
 			if configPath == "" {
-				configPath = defaultConfigPath
+				configPath = findConfigFile()
+				if configPath == "" {
+					// No config file found, prompt user
+					fmt.Println("No configuration file found. Please configure /etc/go-idp/inlets/config.yaml")
+				}
 			}
 
-			// Load config file if specified or default exists
+			// Load config file if specified or found
 			var configFile *ServerConfig
 			if configPath != "" {
 				loadedConfig, err := loadConfigFile(configPath)
 				if err != nil {
 					log.Printf("[server] Warning: Failed to load config file %s: %v", configPath, err)
 				} else if loadedConfig != nil {
+					// Validate that Clients is not empty
+					if len(loadedConfig.Clients) == 0 {
+						return fmt.Errorf("config file %s: clients configuration is required and cannot be empty", configPath)
+					}
 					configFile = loadedConfig
 					log.Printf("[server] Config file loaded: %s", configPath)
 				}
@@ -152,20 +159,6 @@ func Server() *cli.Command {
 				}
 			}
 
-			serverDomain := c.String("domain")
-			if serverDomain == "" {
-				if configFile != nil && configFile.Domain != "" {
-					serverDomain = configFile.Domain
-				}
-			}
-
-			serverToken := c.String("token")
-			if serverToken == "" {
-				if configFile != nil && configFile.Token != "" {
-					serverToken = configFile.Token
-				}
-			}
-
 			serverSecure := c.Bool("secure")
 			if !serverSecure {
 				if configFile != nil && configFile.Secure != nil {
@@ -187,16 +180,6 @@ func Server() *cli.Command {
 				if configFile != nil && configFile.Notification != nil {
 					notificationURL = configFile.Notification.URL
 				}
-			}
-
-			// Validate required options
-			if serverDomain == "" {
-				return fmt.Errorf("domain is required (use --domain, set DOMAIN env var, or specify in config file)")
-			}
-
-			// Validate token requirement
-			if serverToken == "" && (configFile == nil || len(configFile.Clients) == 0) {
-				return fmt.Errorf("token is required (use --token, set TOKEN env var, or specify in config file)")
 			}
 
 			// Setup notification config
@@ -242,12 +225,11 @@ func Server() *cli.Command {
 			}
 
 			// Create GetToken function with config reference
-			getToken := createGetTokenFunctionWithRef(serverToken, configRef)
+			getToken := createGetTokenFunctionWithRef(configRef)
 
 			// Create server options
 			options := server.Options{
 				Version:         ServerVersion,
-				Domain:          serverDomain,
 				Port:            serverPort,
 				TCPPort:         serverTCPPort,
 				Secure:          serverSecure,
@@ -295,7 +277,7 @@ func Server() *cli.Command {
 
 			// Start config file watcher in a goroutine
 			if watcher != nil {
-				go watchConfigFile(watcher, configPath, configRef, srv, serverToken)
+				go watchConfigFile(watcher, configPath, configRef, srv)
 			}
 
 			// Wait for interrupt signal
@@ -315,6 +297,53 @@ func Server() *cli.Command {
 			return nil
 		},
 	}
+}
+
+// findConfigFile finds configuration file by priority order
+func findConfigFile() string {
+	// Get current working directory and home directory
+	wd, _ := os.Getwd()
+	homeDir, _ := os.UserHomeDir()
+
+	// Iterate through config file paths in priority order
+	for _, pathTemplate := range ConfigFilePaths {
+		// Resolve placeholders
+		path := pathTemplate
+
+		// Skip paths with {CWD} if we can't get working directory
+		if strings.Contains(path, "{CWD}") {
+			if wd == "" {
+				continue
+			}
+			path = strings.ReplaceAll(path, "{CWD}", wd)
+		}
+
+		// Replace {HOME} placeholder
+		if strings.Contains(path, "{HOME}") {
+			if homeDir == "" {
+				continue
+			}
+			path = strings.ReplaceAll(path, "{HOME}", homeDir)
+		}
+
+		// Convert to OS-specific path separators and normalize
+		path = filepath.FromSlash(path)
+		path = filepath.Clean(path)
+
+		// Check if file exists
+		if fileExists(path) {
+			return path
+		}
+	}
+
+	// No config file found
+	return ""
+}
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // loadConfigFile loads configuration from a YAML file
@@ -338,7 +367,7 @@ func loadConfigFile(path string) (*ServerConfig, error) {
 }
 
 // createGetTokenFunctionWithRef creates a GetToken function that uses a config reference for dynamic updates
-func createGetTokenFunctionWithRef(token string, configRef *struct {
+func createGetTokenFunctionWithRef(configRef *struct {
 	mu     sync.RWMutex
 	config *ServerConfig
 }) types.GetToken {
@@ -357,39 +386,43 @@ func createGetTokenFunctionWithRef(token string, configRef *struct {
 		// Get current config (with read lock)
 		configRef.mu.RLock()
 		configFile := configRef.config
+		if configFile == nil {
+			return nil, fmt.Errorf("config file is required")
+		}
+
 		configRef.mu.RUnlock()
 
 		// Handle credentials auth
 		if authType == types.AuthTypeCredentials {
-			// Look up client secret from config file
-			if configFile != nil && len(configFile.Clients) > 0 {
-				for _, client := range configFile.Clients {
-					if client.ClientID == clientId {
-						return &types.TokenResponse{
-							AuthType: types.AuthTypeCredentials,
-							Token:    client.ClientSecret,
-							Config:   client.Config,
-						}, nil
+			for _, clientCfg := range configFile.Clients {
+				if clientCfg.ClientID == clientId {
+					// Use client config if provided, otherwise create default config with version 2.0.0
+					clientConfig := clientCfg.Config
+					if clientConfig == nil {
+						clientConfig = &client.Config{
+							Version: ServerVersion,
+						}
+					} else if clientConfig.Version == "" {
+						// If config exists but version is empty, create new config with default version
+						clientConfig = &client.Config{
+							Version:                ServerVersion,
+							Notification:           clientConfig.Notification,
+							NegotiatedCapabilities: clientConfig.NegotiatedCapabilities,
+						}
 					}
+					return &types.TokenResponse{
+						AuthType: types.AuthTypeCredentials,
+						Token:    clientCfg.ClientSecret,
+						Config:   clientConfig,
+					}, nil
 				}
-				return nil, fmt.Errorf("client not found: %s", clientId)
 			}
-			// Fallback to token if no clients configured
-			if token == "" {
-				return nil, fmt.Errorf("credentials auth requires clients configuration or token")
-			}
-			return &types.TokenResponse{
-				AuthType: types.AuthTypeCredentials,
-				Token:    token,
-			}, nil
+			return nil, fmt.Errorf("client not found: %s", clientId)
 		}
 
 		// Handle token auth (default)
 		// Use token from config file if available, otherwise use provided token
-		configToken := token
-		if configFile != nil && configFile.Token != "" {
-			configToken = configFile.Token
-		}
+		configToken := configFile.Token
 		if configToken == "" {
 			return nil, fmt.Errorf("token is required for token authentication")
 		}
@@ -408,7 +441,7 @@ func createGetTokenFunctionWithRef(token string, configRef *struct {
 func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *struct {
 	mu     sync.RWMutex
 	config *ServerConfig
-}, srv *server.Server, defaultToken string) {
+}, srv *server.Server) {
 	var reloadTimer *time.Timer
 	reloadDelay := 200 * time.Millisecond // Debounce delay
 
@@ -428,7 +461,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 
 				// Set new timer for debouncing
 				reloadTimer = time.AfterFunc(reloadDelay, func() {
-					reloadConfig(configPath, configRef, srv, defaultToken)
+					reloadConfig(configPath, configRef, srv)
 				})
 			}
 		case err, ok := <-watcher.Errors:
@@ -444,7 +477,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 func reloadConfig(configPath string, configRef *struct {
 	mu     sync.RWMutex
 	config *ServerConfig
-}, srv *server.Server, defaultToken string) {
+}, srv *server.Server) {
 	// Get old clients count
 	configRef.mu.RLock()
 	oldClientsCount := 0
@@ -460,22 +493,25 @@ func reloadConfig(configPath string, configRef *struct {
 		return
 	}
 
+	// Validate that Clients is not empty
+	if newConfig == nil || len(newConfig.Clients) == 0 {
+		log.Printf("[server:config] 热更新失败: 配置文件 %s 中的 clients 配置不能为空", configPath)
+		return
+	}
+
 	// Update config reference
 	configRef.mu.Lock()
 	configRef.config = newConfig
 	configRef.mu.Unlock()
 
-	// Get new clients count
-	newClientsCount := 0
-	if newConfig != nil {
-		newClientsCount = len(newConfig.Clients)
-	}
+	// Get new clients count (newConfig is guaranteed to be non-nil at this point)
+	newClientsCount := len(newConfig.Clients)
 
 	log.Printf("[server:config] 配置文件已热更新 (客户端数量: %d -> %d)", oldClientsCount, newClientsCount)
 
 	// Build bandwidth limits from new config
 	var bandwidthLimits *limiter.ClientBandwidthLimits
-	if newConfig != nil && newConfig.BandwidthLimits != nil {
+	if newConfig.BandwidthLimits != nil {
 		bandwidthLimits = &limiter.ClientBandwidthLimits{
 			ByClientId: make(map[string]*limiter.BandwidthLimit),
 		}
@@ -497,11 +533,11 @@ func reloadConfig(configPath string, configRef *struct {
 	}
 
 	// Create new GetToken function with updated config
-	getToken := createGetTokenFunctionWithRef(defaultToken, configRef)
+	getToken := createGetTokenFunctionWithRef(configRef)
 
 	// Setup notification config
 	var notificationConfig *client.NotificationConfig
-	if newConfig != nil && newConfig.Notification != nil {
+	if newConfig.Notification != nil {
 		notificationConfig = newConfig.Notification
 	}
 

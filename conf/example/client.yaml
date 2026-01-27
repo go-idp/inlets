@@ -1,0 +1,79 @@
+# Inlets Client Configuration Example
+#
+# NOTE: Currently, the inlets client uses command-line arguments for configuration.
+# This file serves as a reference for available options and their usage.
+#
+# Future versions may support YAML configuration files.
+#
+# Usage examples:
+#
+# HTTP Tunnel:
+#   inlets client -r tunnel.example.com:443 -s myapp http 127.0.0.1:9000
+#   inlets client --remote tunnel.example.com:443 --sub-domain myapp http 127.0.0.1:9000
+#
+# TCP Tunnel with Token:
+#   inlets client -r tunnel.example.com:443 -t your-token -p 20100 tcp 127.0.0.1:22
+#
+# TCP Tunnel with Credentials:
+#   inlets client -r tunnel.example.com:443 --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
+#
+# Public HTTP Tunnel (no authentication):
+#   inlets client -r tunnel.example.com:443 http 127.0.0.1:9000
+
+# Configuration Reference:
+#
+# Required Arguments:
+#   [type]        - Tunnel type: "http" or "tcp"
+#   [upstream]     - Upstream address: port (e.g., 9000) or hostname:port (e.g., 127.0.0.1:9000)
+#
+# Optional Flags:
+#   -r, --remote              Server address (default: inlets.zcorky.com:443)
+#                            Example: tunnel.example.com:443
+#
+#   -p, --port                Custom tunnel port for TCP (env: TUNNEL_PORT)
+#                            Example: 20100
+#
+#   -s, --sub-domain          Custom tunnel sub domain for HTTP (env: SUB_DOMAIN)
+#                            Example: myapp
+#
+#   -t, --token               Authentication token (env: TOKEN)
+#                            Example: your-secret-token
+#
+#   --credentials             Authentication credentials in format clientId:clientSecret (env: CREDENTIALS)
+#                            Example: client1:secret1
+#
+#   --remote-tcp-port         Server TCP port (default: 8443, env: REMOTE_TCP_PORT)
+#                            Example: 8443
+#
+#   --healthcheck-interval    Service health check interval in milliseconds (default: 30000, env: HEALTHCHECK_INTERVAL)
+#                            Example: 30000
+#
+#   --report-url              Error report URL (env: REPORT_URL)
+#                            Example: https://api.example.com/report
+#
+#   --legacy                  Use legacy protocol version (v1) instead of v2 (env: LEGACY)
+#                            Example: false
+#
+# Authentication Types:
+#   1. Token: Use -t or --token flag
+#      Example: inlets client -t your-token http 127.0.0.1:9000
+#
+#   2. Credentials: Use --credentials flag (format: clientId:clientSecret)
+#      Example: inlets client --credentials client1:secret1 tcp 127.0.0.1:22
+#
+#   3. Public: No authentication (only for HTTP tunnels)
+#      Example: inlets client http 127.0.0.1:9000
+#
+# Examples:
+#
+# Development - Local HTTP tunnel:
+#   inlets client -r 127.0.0.1:8080 http 127.0.0.1:9000
+#
+# Production - HTTP tunnel with subdomain:
+#   inlets client -r tunnel.example.com:443 -s myapp -t your-token http 127.0.0.1:9000
+#
+# SSH tunnel via TCP:
+#   inlets client -r tunnel.example.com:443 --credentials client1:secret1 -p 20100 tcp 127.0.0.1:22
+#
+# Database tunnel via TCP:
+#   inlets client -r tunnel.example.com:443 -t your-token -p 3306 tcp 127.0.0.1:3306

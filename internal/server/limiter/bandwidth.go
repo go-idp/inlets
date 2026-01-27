@@ -77,8 +77,8 @@ func min(a, b float64) float64 {
 
 // BandwidthLimit represents bandwidth limit configuration
 type BandwidthLimit struct {
-	UploadBytesPerSecond   *int64
-	DownloadBytesPerSecond *int64
+	UploadBytesPerSecond   *int64 `yaml:"upload,omitempty"`
+	DownloadBytesPerSecond *int64 `yaml:"download,omitempty"`
 }
 
 // ClientBandwidthLimits contains bandwidth limits configuration
