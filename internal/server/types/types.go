@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/client"
-	"github.com/go-zoox/inlets/internal/server/limiter"
-	"github.com/go-zoox/inlets/internal/server/stats"
+	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/server/limiter"
+	"github.com/go-idp/inlets/internal/server/stats"
 	"github.com/gorilla/websocket"
 )
 

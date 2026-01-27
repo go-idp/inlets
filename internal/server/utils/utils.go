@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/server/types"
 )
 
 // HMACSHA512 computes HMAC-SHA512 signature

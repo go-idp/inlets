@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/go-zoox/inlets/internal/forward"
+	"github.com/go-idp/inlets/internal/forward"
 	"github.com/urfave/cli/v2"
 )
 

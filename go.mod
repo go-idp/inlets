@@ -1,4 +1,4 @@
-module github.com/go-zoox/inlets
+module github.com/go-idp/inlets
 
 go 1.22
 

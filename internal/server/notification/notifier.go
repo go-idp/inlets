@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/client"
 )
 
 // Notifier handles sending notifications to various services

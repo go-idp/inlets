@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/go-zoox/inlets/internal/client"
-	"github.com/go-zoox/inlets/internal/server/notification"
-	"github.com/go-zoox/inlets/internal/server/protocol"
-	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/server/notification"
+	"github.com/go-idp/inlets/internal/server/protocol"
+	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/gorilla/websocket"
 )
 

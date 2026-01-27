@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/go-zoox/inlets"
+	"github.com/go-idp/inlets"
 	"github.com/go-zoox/logger"
 	"github.com/urfave/cli/v2"
 )

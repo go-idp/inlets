@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-zoox/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/client"
 	"github.com/urfave/cli/v2"
 )
 

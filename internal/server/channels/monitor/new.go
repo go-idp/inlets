@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/server/tunnel"
+	"github.com/go-idp/inlets/internal/server/tunnel"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

@@ -5,8 +5,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/go-zoox/inlets/internal/client"
-	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

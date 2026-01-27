@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/client"
-	"github.com/go-zoox/inlets/internal/server/protocol"
-	"github.com/go-zoox/inlets/internal/server/types"
-	"github.com/go-zoox/inlets/internal/server/utils"
+	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/server/protocol"
+	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/server/utils"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

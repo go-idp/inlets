@@ -13,10 +13,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 
-	"github.com/go-zoox/inlets/internal/client"
-	"github.com/go-zoox/inlets/internal/server"
-	"github.com/go-zoox/inlets/internal/server/limiter"
-	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/server"
+	"github.com/go-idp/inlets/internal/server/limiter"
+	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/urfave/cli/v2"
 )
 

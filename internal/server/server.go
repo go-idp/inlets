@@ -7,15 +7,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/client"
-	datachannel "github.com/go-zoox/inlets/internal/server/channels/data"
-	monitorchannel "github.com/go-zoox/inlets/internal/server/channels/monitor"
-	servercontainer "github.com/go-zoox/inlets/internal/server/container"
-	"github.com/go-zoox/inlets/internal/server/limiter"
-	"github.com/go-zoox/inlets/internal/server/stats"
-	"github.com/go-zoox/inlets/internal/server/tunnel"
-	"github.com/go-zoox/inlets/internal/server/types"
-	"github.com/go-zoox/inlets/internal/server/utils"
+	"github.com/go-idp/inlets/internal/client"
+	datachannel "github.com/go-idp/inlets/internal/server/channels/data"
+	monitorchannel "github.com/go-idp/inlets/internal/server/channels/monitor"
+	servercontainer "github.com/go-idp/inlets/internal/server/container"
+	"github.com/go-idp/inlets/internal/server/limiter"
+	"github.com/go-idp/inlets/internal/server/stats"
+	"github.com/go-idp/inlets/internal/server/tunnel"
+	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/server/utils"
 )
 
 // Options contains options for creating a server

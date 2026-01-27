@@ -3,7 +3,7 @@ package container
 import (
 	"sync"
 
-	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/server/types"
 )
 
 // callbackContainer implements CallbackContainer

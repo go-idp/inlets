@@ -7,7 +7,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/go-zoox/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/client"
 	"github.com/gorilla/websocket"
 )
 

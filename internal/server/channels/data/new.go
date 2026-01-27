@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/go-zoox/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/gorilla/websocket"
 )
 

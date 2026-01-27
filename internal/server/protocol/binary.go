@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-zoox/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/client"
 	"github.com/gorilla/websocket"
 )
 
