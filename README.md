@@ -1,19 +1,19 @@
-# Inlets Go Client
+# Inlets Go
 
-高可用 inlets 客户端的 Go 实现，负责与云端隧道服务通过 WebSocket 建立长连接，并把本地 HTTP/TCP 服务安全地暴露到公网。
+A high-availability Go implementation of the inlets tunnel system, including both client and server components. It establishes long-lived WebSocket connections to securely expose local HTTP/TCP services to the public internet.
 
-## 架构示意
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Local["本地环境"]
-        CLI["inlets-client CLI"]
+    subgraph Local["Local Environment"]
+        CLI["inlets client CLI"]
         Tunnels["HTTP/TCP Upstream"]
     end
 
-    subgraph Edge["隧道服务端"]
+    subgraph Edge["Tunnel Server"]
         WS["WebSocket Server"]
-        Router["请求路由"]
+        Router["Request Router"]
         TCPHub["TCP Relay"]
     end
 
@@ -27,129 +27,237 @@ flowchart LR
     TCPHub --> Internet
 ```
 
-### 数据流
+### Data Flow
 
-1. CLI 启动后与云端 WS 建立连接并完成签名鉴权（`token`/`credentials`/`public`）。
-2. 连接成功后创建两条数据通道：
-   - **HTTP**：服务端通过 WS 下发请求，客户端本地转发并回写响应。
-   - **TCP**：服务端监听公网 TCP 端口，用户连接后再回拨客户端建立真正的数据流。
-3. 客户端同时维护心跳（`ping/pong` + 服务端 `@@CONFIG` 动态下发）和自动重连，确保隧道稳定。
+1. After the CLI starts, it establishes a connection with the cloud WebSocket server and completes signature authentication (`token`/`credentials`/`public`).
+2. After a successful connection, two data channels are created:
+   - **HTTP**: The server sends requests through WebSocket, and the client forwards them locally and writes back responses.
+   - **TCP**: The server listens on a public TCP port, and after a user connects, it calls back to the client to establish the actual data stream.
+3. The client maintains heartbeat (`ping/pong` + server `@@CONFIG` dynamic delivery) and automatic reconnection to ensure tunnel stability.
 
-## 模块划分
+## Module Structure
 
 ```
 internal/client/
-├── client.go       // 连接管理、重连、消息分发
-├── handlers.go     // HTTP/TCP 数据面逻辑
-├── heartbeat.go    // 心跳与鉴权超时
-├── types.go        // 配置与 DTO
-└── utils.go        // HMAC、地址工具
+├── client.go       // Connection management, reconnection, message distribution
+├── handlers.go     // HTTP/TCP data plane logic
+├── heartbeat.go    // Heartbeat and authentication timeout
+├── types.go        // Configuration and DTOs
+└── utils.go        // HMAC, address utilities
+
+internal/server/
+├── server.go       // Server main logic
+├── protocol/       // Protocol handling (new/legacy protocol adapter)
+├── channels/       // Data channel management
+├── tunnel/         // Tunnel handling (HTTP/TCP)
+└── ...
 ```
 
-## 功能特性
+## Features
 
-- HTTP & TCP 双隧道
-- Token / Credentials / Public 三种鉴权
-- 自动重连、心跳保活、防漂移超时
-- TCP 端到端 HMAC 验证
-- IPv4/IPv6 兼容的 `net.JoinHostPort` 地址拼装
-- 协议版本协商支持（2.0.0+ 支持新协议，自动降级兼容旧协议）
+- HTTP & TCP dual tunneling
+- Three authentication methods: Token / Credentials / Public
+- Automatic reconnection, heartbeat keepalive, drift timeout prevention
+- End-to-end TCP HMAC verification
+- IPv4/IPv6 compatible `net.JoinHostPort` address assembly
+- Protocol version negotiation support (2.0.0+ supports new protocol, auto-downgrade for legacy compatibility)
+- Server supports hot-reload configuration files
+- Server supports bandwidth limiting
+- Server supports multiple notification methods (DingTalk, Feishu, WeCom, Slack)
 
-## 构建
+## Building
 
 ```bash
-cd packages/inlets/go
-go build -o inlets-client main.go
+# Build the complete program (includes client, server, forward commands)
+go build -o inlets ./cmd/inlets
+
+# Or specify the full path
+go build -o inlets cmd/inlets/inlets.go
 ```
 
-或使用 Makefile：
+## Command Line Usage
+
+### Client
+
+#### HTTP Tunnel
 
 ```bash
-make build
+# Public HTTP tunnel (public mode)
+inlets client http 127.0.0.1:9000
+
+# Specify subdomain + token
+inlets client -s myapp -t token http 127.0.0.1:9000
 ```
 
-## 命令行使用
-
-### HTTP 隧道
+#### TCP Tunnel
 
 ```bash
-# 公网 HTTP 隧道（public 模式）
-./inlets-client http 127.0.0.1:9000
+# Using token
+inlets client -p 20100 -t token tcp 127.0.0.1:22
 
-# 制定子域 + token
-./inlets-client http 127.0.0.1:9000 -s myapp -t token
+# Using credentials
+inlets client --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
 ```
 
-### TCP 隧道
+#### Version Information
 
 ```bash
-# 使用 token
-./inlets-client tcp 127.0.0.1:22 -p 20100 -t token
-
-# 使用 credentials
-./inlets-client tcp 127.0.0.1:22 --credentials clientId:clientSecret
+# Print version information
+inlets --version
+# or
+inlets -V
 ```
 
-### 查看版本信息
+#### Protocol Version
 
 ```bash
-# 打印客户端版本信息
-./inlets-client --version
-# 或
-./inlets-client -v
+# Use latest protocol version (default v2, supports capability negotiation)
+inlets client http 127.0.0.1:9000
+
+# Use legacy protocol version (legacy mode, v1)
+inlets client --legacy http 127.0.0.1:9000
 ```
 
-### 协议版本
+**Protocol Version Notes:**
+- **Default (v2 / 2.0.0)**: Supports new protocol, client sends capabilities for negotiation, server returns negotiated protocol configuration
+- **Legacy (v1 / 1.2.0)**: Uses legacy protocol, doesn't send capabilities, fully compatible with older server versions
 
-```bash
-# 使用最新协议版本（默认 v2，支持能力协商）
-./inlets-client http 127.0.0.1:9000
+#### Client Common Parameters
 
-# 使用旧协议版本（legacy 模式，v1）
-./inlets-client http 127.0.0.1:9000 --legacy
-```
-
-**协议版本说明：**
-- **默认（v2 / 2.0.0）**：支持新协议，客户端会发送 capabilities 进行能力协商，服务端返回协商后的协议配置
-- **Legacy（v1 / 1.2.0）**：使用旧协议（legacy protocol），不发送 capabilities，完全兼容旧版本服务端
-
-## 常用参数
-
-| 参数 | 说明 | 默认值 |
+| Parameter | Description | Default |
 | --- | --- | --- |
-| `type` | 隧道类型 `http` / `tcp` | 必填 |
-| `upstream` | 本地 upstream，端口或 `host:port` | 必填 |
-| `-s, --sub-domain` | HTTP 自定义子域 | |
-| `-p, --port` | TCP tunnel 端口 | |
-| `-t, --token` | Token 鉴权 | |
+| `type` | Tunnel type `http` / `tcp` | Required |
+| `upstream` | Local upstream, port or `host:port` | Required |
+| `-s, --sub-domain` | HTTP custom subdomain | |
+| `-p, --port` | TCP tunnel port | |
+| `-t, --token` | Token authentication | |
 | `--credentials` | `clientId:clientSecret` | |
-| `-r, --remote` | 服务端地址 | `inlets.zcorky.com:443` |
-| `--remote-tcp-port` | 服务端 TCP 回拨端口 | `8443` |
-| `--healthcheck-interval` | 鉴权超时 / 健康检查间隔 (ms) | `30000` |
-| `--legacy` | 使用旧协议版本（v1） | `false`（默认使用 v2） |
-| `-v, --version` | 打印客户端版本信息并退出 | |
+| `-r, --remote` | Server address | `inlets.zcorky.com:443` |
+| `--remote-tcp-port` | Server TCP callback port | `8443` |
+| `--healthcheck-interval` | Authentication timeout / health check interval (ms) | `30000` |
+| `--legacy` | Use legacy protocol version (v1) | `false` (default v2) |
+| `--report-url` | Error report webhook | |
 
-环境变量：
+**Client Environment Variables:**
 
-所有参数都支持通过环境变量配置，环境变量优先级低于命令行参数：
+All parameters can be configured via environment variables. Environment variables have lower priority than command-line arguments:
 
-- `TUNNEL_PORT`：TCP tunnel 端口
-- `SUB_DOMAIN`：HTTP 自定义子域
-- `TOKEN`：Token 鉴权
-- `CREDENTIALS`：Authentication credentials (clientId:clientSecret)
-- `REMOTE`：服务端地址（默认：`inlets.zcorky.com:443`）
-- `REMOTE_TCP_PORT`：服务端 TCP 回拨端口（默认：`8443`）
-- `HEALTHCHECK_INTERVAL`：健康检查间隔（ms，默认：`30000`）
-- `REPORT_URL`：异常汇报 webhook
-- `LEGACY`：使用旧协议版本（设置为 `true`、`1` 或 `yes` 时启用）
+- `TUNNEL_PORT`: TCP tunnel port
+- `SUB_DOMAIN`: HTTP custom subdomain
+- `TOKEN`: Token authentication
+- `CREDENTIALS`: Authentication credentials (clientId:clientSecret)
+- `REMOTE`: Server address (default: `inlets.zcorky.com:443`)
+- `REMOTE_TCP_PORT`: Server TCP callback port (default: `8443`)
+- `HEALTHCHECK_INTERVAL`: Health check interval (ms, default: `30000`)
+- `REPORT_URL`: Error report webhook
+- `LEGACY`: Use legacy protocol version (set to `true`, `1`, or `yes` to enable)
 
-## 示例
+### Server
 
 ```bash
-# 开发环境连接本地 server
-./inlets-client http 127.0.0.1:9000 -r 127.0.0.1:8080
+# Start server (domain required)
+inlets server -d example.com -t your-token
 
-# 生产 SSH 隧道
-./inlets-client tcp 127.0.0.1:22 --credentials prod:secret
+# Use config file
+inlets server -c /path/to/config.yml
+
+# Specify ports
+inlets server -d example.com -p 8080 --tcp-port 8443
+
+# Disable HTTPS (enabled by default)
+inlets server -d example.com -t your-token --secure=false
 ```
 
+#### Server Common Parameters
+
+| Parameter | Description | Default |
+| --- | --- | --- |
+| `-d, --domain` | Server domain (required) | |
+| `-p, --port` | WebSocket service port | `8080` |
+| `--tcp-port` | TCP service port | `8443` |
+| `-s, --secure` | Enable HTTPS (only for URL) | `true` |
+| `-t, --token` | Authentication token | |
+| `-c, --config` | Config file path | `$HOME/.config/inlets.yml` |
+| `--notification-provider` | Notification provider (dingtalk, feishu, wecom, slack) | |
+| `--notification-url` | Notification webhook URL | |
+
+**Server Environment Variables:**
+
+- `DOMAIN`: Server domain
+- `SERVER_PORT`: WebSocket service port (default: `8080`)
+- `SERVER_TCP_PORT`: TCP service port (default: `8443`)
+- `SECURE`: Enable HTTPS (default: `true`)
+- `TOKEN`: Authentication token
+- `NOTIFICATION_PROVIDER`: Notification provider
+- `NOTIFICATION_URL`: Notification webhook URL
+
+#### Server Configuration File
+
+The server supports YAML configuration files. The default path is `$HOME/.config/inlets.yml`, and it supports hot-reload.
+
+Configuration file example:
+
+```yaml
+domain: example.com
+port: 8080
+tcpPort: 8443
+secure: true
+token: your-token
+
+clients:
+  - clientId: client1
+    clientSecret: secret1
+    config:
+      version: "2.0.0"
+    bandwidthLimit:
+      upload: 1024000    # 1MB/s
+      download: 1024000  # 1MB/s
+
+bandwidthLimits:
+  global:
+    upload: 512000      # 512KB/s
+    download: 512000    # 512KB/s
+  clients:
+    client1:
+      upload: 1024000
+      download: 1024000
+
+notification:
+  provider: dingtalk
+  url: https://oapi.dingtalk.com/robot/send?access_token=xxx
+```
+
+### Forward
+
+```bash
+# TCP port forwarding
+inlets forward -s 0.0.0.0:8080 -t 127.0.0.1:3000
+```
+
+## Examples
+
+### Client Examples
+
+```bash
+# Development environment connecting to local server
+inlets client -r 127.0.0.1:8080 http 127.0.0.1:9000
+
+# Production SSH tunnel
+inlets client --credentials prod:secret -p 20100 tcp 127.0.0.1:22
+
+# HTTP tunnel with custom subdomain
+inlets client -s myapp -t token http 127.0.0.1:9000
+```
+
+### Server Examples
+
+```bash
+# Basic startup
+inlets server -d tunnel.example.com -t your-secret-token
+
+# Using config file
+inlets server -c /etc/inlets/config.yml
+
+# Custom ports
+inlets server -d tunnel.example.com -t token -p 9000 --tcp-port 9443
+```
