@@ -130,7 +130,6 @@ func Server() *cli.Command {
 				loadedConfig, err := loadConfigFile(configPath)
 				if err != nil {
 					log.Printf("[server] Warning: Failed to load config file %s: %v", configPath, err)
-					time.Sleep(10 * time.Second)
 					return fmt.Errorf("failed to load config file: %v", err)
 				} else if loadedConfig != nil {
 					// Validate that Clients is not empty
@@ -386,13 +385,14 @@ func createGetTokenFunctionWithRef(configRef *struct {
 		}
 
 		// Get current config (with read lock)
+		// Keep lock during entire operation to ensure consistency
 		configRef.mu.RLock()
+		defer configRef.mu.RUnlock()
+
 		configFile := configRef.config
 		if configFile == nil {
 			return nil, fmt.Errorf("config file is required")
 		}
-
-		configRef.mu.RUnlock()
 
 		// Handle credentials auth
 		if authType == types.AuthTypeCredentials {
@@ -446,6 +446,12 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 }, srv *server.Server) {
 	var reloadTimer *time.Timer
 	reloadDelay := 200 * time.Millisecond // Debounce delay
+	defer func() {
+		// Clean up timer on exit
+		if reloadTimer != nil {
+			reloadTimer.Stop()
+		}
+	}()
 
 	for {
 		select {
@@ -454,7 +460,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 				return
 			}
 			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Printf("[server:config] 检测到配置文件变化: %s", event.Name)
+				log.Printf("[server:config] Config file changed detected: %s", event.Name)
 
 				// Cancel previous timer if exists
 				if reloadTimer != nil {
@@ -470,7 +476,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 			if !ok {
 				return
 			}
-			log.Printf("[server:config] 文件监听出错: %v", err)
+			log.Printf("[server:config] File watcher error: %v", err)
 		}
 	}
 }
@@ -491,13 +497,13 @@ func reloadConfig(configPath string, configRef *struct {
 	// Load new config
 	newConfig, err := loadConfigFile(configPath)
 	if err != nil {
-		log.Printf("[server:config] 热更新失败: %v", err)
+		log.Printf("[server:config] Hot reload failed: %v", err)
 		return
 	}
 
 	// Validate that Clients is not empty
 	if newConfig == nil || len(newConfig.Clients) == 0 {
-		log.Printf("[server:config] 热更新失败: 配置文件 %s 中的 clients 配置不能为空", configPath)
+		log.Printf("[server:config] Hot reload failed: clients configuration in config file %s cannot be empty", configPath)
 		return
 	}
 
@@ -509,7 +515,7 @@ func reloadConfig(configPath string, configRef *struct {
 	// Get new clients count (newConfig is guaranteed to be non-nil at this point)
 	newClientsCount := len(newConfig.Clients)
 
-	log.Printf("[server:config] 配置文件已热更新 (客户端数量: %d -> %d)", oldClientsCount, newClientsCount)
+	log.Printf("[server:config] Config file hot reloaded (client count: %d -> %d)", oldClientsCount, newClientsCount)
 
 	// Build bandwidth limits from new config
 	var bandwidthLimits *limiter.ClientBandwidthLimits
@@ -545,18 +551,18 @@ func reloadConfig(configPath string, configRef *struct {
 
 	// Update server configuration
 	if err := srv.UpdateConfig(getToken, notificationConfig, bandwidthLimits); err != nil {
-		log.Printf("[server:config] 更新服务器配置失败: %v", err)
+		log.Printf("[server:config] Failed to update server configuration: %v", err)
 		return
 	}
 
 	// Send notification if configured
 	if notificationConfig != nil {
 		now := time.Now().Format("2006-01-02 15:04:05")
-		title := "[配置更新] 配置文件已重新加载"
+		title := "[Config Update] Config file reloaded"
 		message := []string{
-			fmt.Sprintf("配置文件路径: %s", configPath),
-			fmt.Sprintf("客户端数量: %d -> %d", oldClientsCount, newClientsCount),
-			fmt.Sprintf("当前时间: %s", now),
+			fmt.Sprintf("Config file path: %s", configPath),
+			fmt.Sprintf("Client count: %d -> %d", oldClientsCount, newClientsCount),
+			fmt.Sprintf("Current time: %s", now),
 		}
 		// Note: We can't directly access the notification instance here,
 		// but the UpdateConfig method should have updated it
