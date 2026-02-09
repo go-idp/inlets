@@ -348,6 +348,8 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 			}
 			if err := c.handleAuthenticateResponse(payload); err != nil {
 				c.logger.Printf("Error handling authenticate response: %v", err)
+				// if failed to handle authenticate response, exit the client
+				os.Exit(1)
 				return
 			}
 			// Data channel will be created on-demand when server requests it

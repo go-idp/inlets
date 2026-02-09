@@ -130,6 +130,8 @@ func Server() *cli.Command {
 				loadedConfig, err := loadConfigFile(configPath)
 				if err != nil {
 					log.Printf("[server] Warning: Failed to load config file %s: %v", configPath, err)
+					time.Sleep(10 * time.Second)
+					return fmt.Errorf("failed to load config file: %v", err)
 				} else if loadedConfig != nil {
 					// Validate that Clients is not empty
 					if len(loadedConfig.Clients) == 0 {
