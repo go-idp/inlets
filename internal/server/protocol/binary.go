@@ -586,6 +586,8 @@ func (a *BinaryProtocolAdapter) RemoveDataChannelForStream(streamId string) {
 // SendTCPData sends TCP data
 // For new protocol, if data channel is available, sends via data channel; otherwise uses monitor channel
 func (a *BinaryProtocolAdapter) SendTCPData(streamId string, data []byte) error {
+	useTCPOverWS := a.capabilities != nil && (a.capabilities.Flags&client.CapabilityFlagTCPOverWS) != 0
+
 	// Prefer per-stream data channel
 	if dc := a.getDataChannel(streamId); dc != nil {
 		return a.sendMessageViaSpecificDataChannel(dc, MessageTypeTCPData, streamId, data)
@@ -593,6 +595,11 @@ func (a *BinaryProtocolAdapter) SendTCPData(streamId string, data []byte) error 
 	// Fallback to shared data channel
 	if a.dataConn != nil {
 		return a.sendMessageViaDataChannel(MessageTypeTCPData, streamId, data)
+	}
+	// For new protocol (TCP over WS), monitor channel does not carry tcp:data.
+	// Failing fast prevents silent black-holing that can hang client connections.
+	if useTCPOverWS {
+		return fmt.Errorf("data channel not ready for stream %s", streamId)
 	}
 	// Otherwise, use monitor channel (legacy protocol or fallback)
 	return a.sendMessage(MessageTypeTCPData, streamId, data)

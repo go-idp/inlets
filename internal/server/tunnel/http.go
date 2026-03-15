@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -82,8 +83,6 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 
 // handleConnection handles a new TCP connection
 func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
-	defer tcpConn.Close()
-
 	socketConfig := &socketConfig{
 		tcpID:     uuid.New().String(),
 		domain:    "",
@@ -91,6 +90,21 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 		isWS:      false,
 		clientID:  "",
 	}
+	defer func() {
+		tcpConn.Close()
+		// Connection-level cleanup: clear all pending callbacks for this TCP connection.
+		t.ctx.CallbackContainer.Remove(socketConfig.tcpID)
+
+		// Log stats once when the connection is closed.
+		if socketConfig.clientID != "" {
+			statsInfo := t.ctx.TrafficStats.FormatStats(socketConfig.clientID)
+			subDomainInfo := ""
+			if socketConfig.subDomain != "" {
+				subDomainInfo = fmt.Sprintf("[%s]", socketConfig.subDomain)
+			}
+			log.Printf("[tunnel:http]%s connection closed - Traffic Stats: %s", subDomainInfo, statsInfo)
+		}
+	}()
 
 	// Read data from connection
 	reader := bufio.NewReader(tcpConn)
@@ -104,19 +118,15 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			return
 		}
 
-		// Read request body if present
+		// Read request body from req.Body.
+		// IMPORTANT: Do not read from the underlying buffered reader directly,
+		// otherwise keep-alive framing can be corrupted for subsequent requests.
 		var bodyData []byte
-		if req.ContentLength > 0 {
-			bodyData = make([]byte, req.ContentLength)
-			if _, err := reader.Read(bodyData); err != nil {
-				log.Printf("[tunnel:http] Error reading request body: %v", err)
-				return
-			}
-		} else if req.Header.Get("Transfer-Encoding") == "chunked" {
-			// Handle chunked encoding
-			bodyData, err = readChunkedBody(reader)
+		if req.Body != nil {
+			bodyData, err = io.ReadAll(req.Body)
+			_ = req.Body.Close()
 			if err != nil {
-				log.Printf("[tunnel:http] Error reading chunked body: %v", err)
+				log.Printf("[tunnel:http] Error reading request body: %v", err)
 				return
 			}
 		}
@@ -145,43 +155,6 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			return
 		}
 	}
-}
-
-// readChunkedBody reads a chunked-encoded HTTP body
-func readChunkedBody(reader *bufio.Reader) ([]byte, error) {
-	var body []byte
-	for {
-		// Read chunk size line
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		line = strings.TrimSpace(line)
-
-		// Parse chunk size (hex)
-		var chunkSize int64
-		if _, err := fmt.Sscanf(line, "%x", &chunkSize); err != nil {
-			return nil, fmt.Errorf("invalid chunk size: %s", line)
-		}
-
-		if chunkSize == 0 {
-			// Last chunk, read trailing CRLF
-			reader.ReadString('\n')
-			break
-		}
-
-		// Read chunk data
-		chunk := make([]byte, chunkSize)
-		if _, err := reader.Read(chunk); err != nil {
-			return nil, err
-		}
-
-		// Read CRLF after chunk
-		reader.ReadString('\n')
-
-		body = append(body, chunk...)
-	}
-	return body, nil
 }
 
 // socketConfig holds configuration for a socket connection
@@ -377,26 +350,6 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 			}
 		}
 	}
-
-	// Handle connection close
-	go func() {
-		// Wait for connection to close
-		buf := make([]byte, 1)
-		tcpConn.Read(buf)
-
-		// Cleanup
-		t.ctx.CallbackContainer.Remove(socketConfig.tcpID)
-
-		// Log stats if clientID is available
-		if socketConfig.clientID != "" {
-			statsInfo := t.ctx.TrafficStats.FormatStats(socketConfig.clientID)
-			subDomainInfo := ""
-			if socketConfig.subDomain != "" {
-				subDomainInfo = fmt.Sprintf("[%s]", socketConfig.subDomain)
-			}
-			log.Printf("[tunnel:http]%s connection closed - Traffic Stats: %s", subDomainInfo, statsInfo)
-		}
-	}()
 
 	return nil
 }
