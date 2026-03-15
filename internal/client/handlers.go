@@ -1,10 +1,13 @@
 package client
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"syscall"
@@ -12,6 +15,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+const upstreamRequestTimeout = 60 * time.Second
 
 func (c *Client) handleAuthenticateResponse(payload interface{}) error {
 	dataBytes, err := json.Marshal(payload)
@@ -93,29 +98,38 @@ func (c *Client) handleHTTPRequest(payload interface{}) error {
 
 func (c *Client) forwardHTTPRequest(id string, data string) {
 	upstreamAddr := joinHostPort(c.opts.UpstreamHost, c.opts.UpstreamPort)
-	conn, err := net.Dial("tcp", upstreamAddr)
+	conn, err := net.DialTimeout("tcp", upstreamAddr, 10*time.Second)
 	if err != nil {
 		c.logger.Printf("Failed to connect to upstream: %v", err)
 		return
 	}
 	defer conn.Close()
 
+	if err := conn.SetDeadline(time.Now().Add(upstreamRequestTimeout)); err != nil {
+		c.logger.Printf("Failed to set upstream deadline: %v", err)
+		return
+	}
+
 	if _, err := conn.Write([]byte(data)); err != nil {
 		c.logger.Printf("Failed to write to upstream: %v", err)
 		return
 	}
 
-	buffer := make([]byte, 4096)
-	var response []byte
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			break
-		}
-		response = append(response, buffer[:n]...)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		c.logger.Printf("Failed to read upstream HTTP response: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var response bytes.Buffer
+	if err := resp.Write(&response); err != nil {
+		c.logger.Printf("Failed to serialize upstream HTTP response: %v", err)
+		return
 	}
 
-	compressed, err := compress(base64.StdEncoding.EncodeToString(response))
+	compressed, err := compress(base64.StdEncoding.EncodeToString(response.Bytes()))
 	if err != nil {
 		c.logger.Printf("Failed to compress response: %v", err)
 		return

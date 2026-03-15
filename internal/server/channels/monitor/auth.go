@@ -222,7 +222,7 @@ func handleAuthenticate(
 			if len(parts) >= 2 {
 				tcpId := parts[0]
 				requestId := strings.Join(parts[1:], ":")
-				callback := ctx.CallbackContainer.Get(tcpId, requestId)
+				callback := ctx.CallbackContainer.Take(tcpId, requestId)
 				if callback != nil {
 					callback(base64Encode(data))
 				}
@@ -285,7 +285,7 @@ func handleResponse(ctx *types.Context, wsConn *WebSocketConnection, payload int
 	if len(parts) >= 2 {
 		tcpId := parts[0]
 		requestId := strings.Join(parts[1:], ":")
-		callback := ctx.CallbackContainer.Get(tcpId, requestId)
+		callback := ctx.CallbackContainer.Take(tcpId, requestId)
 		if callback != nil {
 			// Decode base64 response
 			decoded, err := base64Decode(responseData.Data)

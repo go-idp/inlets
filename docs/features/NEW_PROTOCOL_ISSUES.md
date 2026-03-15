@@ -2,6 +2,32 @@
 
 本文档记录了 inlets go server 新协议（v2 / 2.0.0）实现中存在的问题。
 
+## 最新修复状态（2026-03-15）
+
+以下与“高并发下 HTTPS 请求 pending”直接相关的问题已修复：
+
+1. **HTTP 回调注册竞态（已修复）**
+   - 修复方式：请求发送前先注册回调，避免响应先到导致回调丢失。
+   - 相关代码：`internal/server/tunnel/http.go`
+
+2. **请求长期挂起无兜底（已修复）**
+   - 修复方式：增加请求超时保护，超时返回 `504 Gateway Timeout`。
+   - 相关代码：`internal/server/tunnel/http.go`
+
+3. **回调重复消费/残留风险（已修复）**
+   - 修复方式：新增 `Take(tcpId, requestId)` 原子取出并删除接口。
+   - 相关代码：`internal/server/container/callback.go`, `internal/server/channels/monitor/auth.go`
+
+4. **客户端 EOF 依赖导致 keep-alive 场景卡住（已修复）**
+   - 修复方式：客户端按 HTTP 协议解析响应，不再依赖 EOF。
+   - 相关代码：`internal/client/handlers.go`
+
+新增测试：
+
+- `internal/server/container/callback_test.go`
+- `internal/server/channels/monitor/auth_test.go`
+- `internal/server/tunnel/http_test.go`
+
 ## 问题概览
 
 | 优先级 | 问题 | 位置 | 影响 |
