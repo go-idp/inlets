@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	inlets "github.com/go-idp/inlets"
 	"github.com/go-idp/inlets/internal/client"
 	datachannel "github.com/go-idp/inlets/internal/server/channels/data"
 	monitorchannel "github.com/go-idp/inlets/internal/server/channels/monitor"
@@ -116,6 +117,9 @@ func New(options Options) (*Server, error) {
 		TrafficStats:      stats.NewTrafficStatsContainer(),
 		BandwidthLimiter:  limiter.NewBandwidthLimiter(options.BandwidthLimits),
 	}
+	if options.Version != "" {
+		ctx.Config.Version = options.Version
+	}
 
 	// Create notification service
 	notification := monitorchannel.NewNotification(options.Notification)
@@ -220,6 +224,7 @@ func (s *Server) Start() error {
 
 	// Start HTTP server in a goroutine
 	go func() {
+		log.Printf("[server] Version: %s", inlets.Version)
 		log.Printf("[server] Starting HTTP server on port %s", s.httpServer.Addr)
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[server] HTTP server error: %v", err)

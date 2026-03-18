@@ -32,6 +32,29 @@ func (c *callbackContainer) Get(tcpId string, requestId string) types.CallbackFu
 	return nil
 }
 
+// Take retrieves and removes a callback function by tcpId and requestId.
+func (c *callbackContainer) Take(tcpId string, requestId string) types.CallbackFunc {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tcpCallbacks, exists := c.callbacks[tcpId]
+	if !exists {
+		return nil
+	}
+
+	callback, exists := tcpCallbacks[requestId]
+	if !exists {
+		return nil
+	}
+
+	delete(tcpCallbacks, requestId)
+	if len(tcpCallbacks) == 0 {
+		delete(c.callbacks, tcpId)
+	}
+
+	return callback
+}
+
 // Set stores a callback function by tcpId and requestId
 func (c *callbackContainer) Set(tcpId string, requestId string, callback types.CallbackFunc) {
 	c.mu.Lock()

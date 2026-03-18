@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -27,6 +28,8 @@ type HTTPTunnel struct {
 	requestCount int64
 	mu           sync.Mutex
 }
+
+const requestResponseTimeout = 60 * time.Second
 
 // CreateHTTPTunnel creates a new HTTP tunnel
 func CreateHTTPTunnel(ctx *types.Context, domain string) *HTTPTunnel {
@@ -80,8 +83,6 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 
 // handleConnection handles a new TCP connection
 func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
-	defer tcpConn.Close()
-
 	socketConfig := &socketConfig{
 		tcpID:     uuid.New().String(),
 		domain:    "",
@@ -89,6 +90,21 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 		isWS:      false,
 		clientID:  "",
 	}
+	defer func() {
+		tcpConn.Close()
+		// Connection-level cleanup: clear all pending callbacks for this TCP connection.
+		t.ctx.CallbackContainer.Remove(socketConfig.tcpID)
+
+		// Log stats once when the connection is closed.
+		if socketConfig.clientID != "" {
+			statsInfo := t.ctx.TrafficStats.FormatStats(socketConfig.clientID)
+			subDomainInfo := ""
+			if socketConfig.subDomain != "" {
+				subDomainInfo = fmt.Sprintf("[%s]", socketConfig.subDomain)
+			}
+			log.Printf("[tunnel:http]%s connection closed - Traffic Stats: %s", subDomainInfo, statsInfo)
+		}
+	}()
 
 	// Read data from connection
 	reader := bufio.NewReader(tcpConn)
@@ -102,19 +118,15 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			return
 		}
 
-		// Read request body if present
+		// Read request body from req.Body.
+		// IMPORTANT: Do not read from the underlying buffered reader directly,
+		// otherwise keep-alive framing can be corrupted for subsequent requests.
 		var bodyData []byte
-		if req.ContentLength > 0 {
-			bodyData = make([]byte, req.ContentLength)
-			if _, err := reader.Read(bodyData); err != nil {
-				log.Printf("[tunnel:http] Error reading request body: %v", err)
-				return
-			}
-		} else if req.Header.Get("Transfer-Encoding") == "chunked" {
-			// Handle chunked encoding
-			bodyData, err = readChunkedBody(reader)
+		if req.Body != nil {
+			bodyData, err = io.ReadAll(req.Body)
+			_ = req.Body.Close()
 			if err != nil {
-				log.Printf("[tunnel:http] Error reading chunked body: %v", err)
+				log.Printf("[tunnel:http] Error reading request body: %v", err)
 				return
 			}
 		}
@@ -143,43 +155,6 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			return
 		}
 	}
-}
-
-// readChunkedBody reads a chunked-encoded HTTP body
-func readChunkedBody(reader *bufio.Reader) ([]byte, error) {
-	var body []byte
-	for {
-		// Read chunk size line
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		line = strings.TrimSpace(line)
-
-		// Parse chunk size (hex)
-		var chunkSize int64
-		if _, err := fmt.Sscanf(line, "%x", &chunkSize); err != nil {
-			return nil, fmt.Errorf("invalid chunk size: %s", line)
-		}
-
-		if chunkSize == 0 {
-			// Last chunk, read trailing CRLF
-			reader.ReadString('\n')
-			break
-		}
-
-		// Read chunk data
-		chunk := make([]byte, chunkSize)
-		if _, err := reader.Read(chunk); err != nil {
-			return nil, err
-		}
-
-		// Read CRLF after chunk
-		reader.ReadString('\n')
-
-		body = append(body, chunk...)
-	}
-	return body, nil
 }
 
 // socketConfig holds configuration for a socket connection
@@ -282,53 +257,14 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	t.ctx.TrafficStats.AddRequest(clientID)
 	t.ctx.TrafficStats.AddUploadBytes(clientID, requestBytes)
 
-	// Send request
-	if useNewProtocol && adapter != nil {
-		// New protocol: use adapter
-		dataBytes := []byte(data)
-		if err := adapter.SendHTTPRequest(id, dataBytes); err != nil {
-			log.Printf("[tunnel:http] Failed to send HTTP request: %v", err)
-			destroyConnection(tcpConn)
-			return err
-		}
-	} else {
-		// Legacy protocol: use adapter if available, otherwise send directly
-		if adapter != nil {
-			// Use adapter even for legacy protocol
-			dataBytes := []byte(data)
-			if err := adapter.SendHTTPRequest(id, dataBytes); err != nil {
-				log.Printf("[tunnel:http] Failed to send HTTP request via adapter: %v", err)
-				destroyConnection(tcpConn)
-				return err
-			}
-		} else {
-			// Fallback: send directly via WebSocket (legacy format)
-			// This should not happen if adapter is properly set up
-			message := []interface{}{
-				"request",
-				map[string]interface{}{
-					"id":   id,
-					"data": data, // Legacy protocol expects processed data
-				},
-			}
-
-			messageBytes, err := json.Marshal(message)
-			if err != nil {
-				log.Printf("[tunnel:http] Failed to marshal message: %v", err)
-				destroyConnection(tcpConn)
-				return err
-			}
-
-			if err := wsConn.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
-				log.Printf("[tunnel:http] Failed to write WebSocket message: %v", err)
-				destroyConnection(tcpConn)
-				return err
-			}
-		}
-	}
-
-	// Create callback for response
+	// Create callback for response before sending request to avoid race where
+	// a fast response arrives before callback registration.
+	var timeoutTimer *time.Timer
 	wrappedCallback := func(responseData string) {
+		if timeoutTimer != nil {
+			timeoutTimer.Stop()
+		}
+
 		// Calculate response bytes
 		responseBytes, err := base64.StdEncoding.DecodeString(responseData)
 		if err != nil {
@@ -356,28 +292,64 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		}
 	}
 
-	// Store callback
+	// Store callback before sending request.
 	t.ctx.CallbackContainer.Set(socketConfig.tcpID, requestID, wrappedCallback)
-
-	// Handle connection close
-	go func() {
-		// Wait for connection to close
-		buf := make([]byte, 1)
-		tcpConn.Read(buf)
-
-		// Cleanup
-		t.ctx.CallbackContainer.Remove(socketConfig.tcpID)
-
-		// Log stats if clientID is available
-		if socketConfig.clientID != "" {
-			statsInfo := t.ctx.TrafficStats.FormatStats(socketConfig.clientID)
-			subDomainInfo := ""
-			if socketConfig.subDomain != "" {
-				subDomainInfo = fmt.Sprintf("[%s]", socketConfig.subDomain)
-			}
-			log.Printf("[tunnel:http]%s connection closed - Traffic Stats: %s", subDomainInfo, statsInfo)
+	timeoutTimer = time.AfterFunc(requestResponseTimeout, func() {
+		// Ensure timeout response is sent at most once.
+		timeoutCallback := t.ctx.CallbackContainer.Take(socketConfig.tcpID, requestID)
+		if timeoutCallback != nil {
+			log.Printf("[tunnel:http][%s] request timeout (id: %s)", socketConfig.subDomain, id)
+			timeoutCallback(buildGatewayTimeoutResponse())
 		}
-	}()
+	})
+
+	// Send request
+	sendErr := func(err error) error {
+		if timeoutTimer != nil {
+			timeoutTimer.Stop()
+		}
+		// Remove callback if request dispatch fails.
+		t.ctx.CallbackContainer.Take(socketConfig.tcpID, requestID)
+		log.Printf("[tunnel:http] Failed to send HTTP request: %v", err)
+		destroyConnection(tcpConn)
+		return err
+	}
+
+	if useNewProtocol && adapter != nil {
+		// New protocol: use adapter
+		dataBytes := []byte(data)
+		if err := adapter.SendHTTPRequest(id, dataBytes); err != nil {
+			return sendErr(err)
+		}
+	} else {
+		// Legacy protocol: use adapter if available, otherwise send directly
+		if adapter != nil {
+			// Use adapter even for legacy protocol
+			dataBytes := []byte(data)
+			if err := adapter.SendHTTPRequest(id, dataBytes); err != nil {
+				return sendErr(err)
+			}
+		} else {
+			// Fallback: send directly via WebSocket (legacy format)
+			// This should not happen if adapter is properly set up
+			message := []interface{}{
+				"request",
+				map[string]interface{}{
+					"id":   id,
+					"data": data, // Legacy protocol expects processed data
+				},
+			}
+
+			messageBytes, err := json.Marshal(message)
+			if err != nil {
+				return sendErr(err)
+			}
+
+			if err := wsConn.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
+				return sendErr(err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -411,4 +383,18 @@ func destroyConnection(tcpConn net.Conn) {
 	responseStr := strings.Join(response, "\r\n")
 	tcpConn.Write([]byte(responseStr))
 	tcpConn.Close()
+}
+
+func buildGatewayTimeoutResponse() string {
+	response := []string{
+		"HTTP/1.1 504 Gateway Timeout",
+		"Content-Type: text/plain; charset=utf-8",
+		"Content-Length: 15",
+		fmt.Sprintf("Date: %s", time.Now().UTC().Format(http.TimeFormat)),
+		"Connection: close",
+		"",
+		"Gateway Timeout",
+	}
+
+	return strings.Join(response, "\r\n")
 }

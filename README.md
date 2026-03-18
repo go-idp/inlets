@@ -65,6 +65,21 @@ internal/server/
 - Server supports bandwidth limiting
 - Server supports multiple notification methods (DingTalk, Feishu, WeCom, Slack)
 
+## Stability Update (2026-03)
+
+To address cases where some HTTPS requests stayed pending under higher concurrency, the following fixes are now in place:
+
+- **Callback race fix**: HTTP tunnel now registers response callbacks before sending requests, preventing lost fast responses.
+- **Request timeout fallback**: Server-side tunnel requests now have a timeout guard and return `504 Gateway Timeout` instead of hanging indefinitely.
+- **Atomic callback consumption**: Added `Take(tcpId, requestId)` semantics to fetch-and-remove callbacks in one step.
+- **Client HTTP response parsing fix**: Client no longer waits for EOF to finish a response; it now parses responses via HTTP protocol semantics, which works with keep-alive upstreams.
+
+New tests added for this change:
+
+- `internal/server/container/callback_test.go`
+- `internal/server/channels/monitor/auth_test.go`
+- `internal/server/tunnel/http_test.go`
+
 ## Building
 
 ```bash

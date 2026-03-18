@@ -65,6 +65,21 @@ internal/server/
 - 服务端支持带宽限制
 - 服务端支持多种通知方式（钉钉、飞书、企业微信、Slack）
 
+## 稳定性更新（2026-03）
+
+针对“HTTPS 并发升高时部分请求长期 pending”的场景，已完成以下修复：
+
+- **修复回调竞态**：服务端 HTTP 隧道改为“先注册回调，再发送请求”，避免响应先到导致回调丢失。
+- **增加请求超时兜底**：服务端为隧道请求增加超时保护，超时时返回 `504 Gateway Timeout`，避免无限 pending。
+- **优化回调消费语义**：新增 `Take(tcpId, requestId)` 原子取出并删除回调，防止重复触发和回调残留。
+- **修复客户端响应读取**：客户端不再依赖“读到 EOF”判断响应结束，改为按 HTTP 协议解析响应，兼容 keep-alive 场景。
+
+本次新增测试用例：
+
+- `internal/server/container/callback_test.go`
+- `internal/server/channels/monitor/auth_test.go`
+- `internal/server/tunnel/http_test.go`
+
 ## 构建
 
 ```bash

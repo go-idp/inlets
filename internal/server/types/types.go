@@ -143,6 +143,7 @@ type DomainMappingContainer interface {
 // CallbackContainer interface for callback operations
 type CallbackContainer interface {
 	Get(tcpId string, requestId string) CallbackFunc
+	Take(tcpId string, requestId string) CallbackFunc
 	Set(tcpId string, requestId string, callback CallbackFunc)
 	Remove(tcpId string)
 }
