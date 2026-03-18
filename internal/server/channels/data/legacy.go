@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -86,7 +85,7 @@ func logAuthFailure(remoteAddr string, err error) {
 	if now.Sub(last) >= authFailureLogInterval {
 		authFailureLogLimiter.lastLog[ip] = now
 		authFailureLogLimiter.mu.Unlock()
-		log.Printf("[monitor:tcp] Authentication error from %s: invalid connection", ip)
+		logger.Infof("[monitor:tcp] Authentication error from %s: invalid connection", ip)
 		logger.Debugf("[monitor:tcp] Authentication error from %s: %v", ip, err)
 	} else {
 		authFailureLogLimiter.mu.Unlock()
@@ -109,7 +108,7 @@ func (m *TCPMonitor) acceptConnections() {
 
 // handleConnection handles a new TCP connection
 func (m *TCPMonitor) handleConnection(conn net.Conn) {
-	log.Printf("[tunnel:client][connect][1] ip %s", conn.RemoteAddr())
+	logger.Infof("[tunnel:client][connect][1] ip %s", conn.RemoteAddr())
 
 	var requestID string
 	var isAuthenticated bool
@@ -227,7 +226,7 @@ func (m *TCPMonitor) processAuthentication(
 	authMu.Lock()
 	if *requestID == "" {
 		*requestID = requestIDValue
-		log.Printf("[tunnel:client][connect][2] request id: %s, ip %s", *requestID, conn.RemoteAddr())
+		logger.Infof("[tunnel:client][connect][2] request id: %s, ip %s", *requestID, conn.RemoteAddr())
 	}
 	*isAuthenticated = true
 	authMu.Unlock()
@@ -247,7 +246,7 @@ func (m *TCPMonitor) processAuthentication(
 func (m *TCPMonitor) onAuthenticate(containerID string, requestID string, targetSocket net.Conn) {
 	container := m.ctx.Container.Get(containerID)
 	if container == nil {
-		log.Printf("[monitor:tcp] container not found: %s", containerID)
+		logger.Infof("[monitor:tcp] container not found: %s", containerID)
 		targetSocket.Close()
 		return
 	}
@@ -257,11 +256,11 @@ func (m *TCPMonitor) onAuthenticate(containerID string, requestID string, target
 		clientID = "unknown"
 	}
 
-	log.Printf("[tunnel:client][%s] connected (container id: %s, request id: %s)", clientID, containerID, requestID)
+	logger.Infof("[tunnel:client][%s] connected (container id: %s, request id: %s)", clientID, containerID, requestID)
 
 	// Connect request (this will pipe source socket to target socket)
 	if err := m.ctx.Container.ConnectRequest(containerID, requestID, &targetSocket); err != nil {
-		log.Printf("[monitor:tcp] failed to connect request: %v", err)
+		logger.Infof("[monitor:tcp] failed to connect request: %v", err)
 		targetSocket.Close()
 		return
 	}

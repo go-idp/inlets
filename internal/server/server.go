@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/go-idp/inlets/internal/server/tunnel"
 	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/go-idp/inlets/internal/server/utils"
+	"github.com/go-zoox/logger"
 )
 
 // Options contains options for creating a server
@@ -180,23 +180,23 @@ func New(options Options) (*Server, error) {
 			return
 		}
 
-		log.Printf("[server] Tunnel event received: type=%s, containerId=%s", tunnelType, containerID)
+		logger.Infof("[server] Tunnel event received: type=%s, containerId=%s", tunnelType, containerID)
 
 		if tunnelType == "tcp" {
 			// Create TCP tunnel server
-			log.Printf("[server] Creating TCP tunnel server for container: %s", containerID)
+			logger.Infof("[server] Creating TCP tunnel server for container: %s", containerID)
 			if err := tcpTunnel.CreateServer(tunnel.Options{
 				ContainerID: containerID,
 				Domain:      options.Domain,
 			}); err != nil {
-				log.Printf("[server] Failed to create TCP tunnel: %v", err)
+				logger.Infof("[server] Failed to create TCP tunnel: %v", err)
 			} else {
-				log.Printf("[server] TCP tunnel server created successfully for container: %s", containerID)
+				logger.Infof("[server] TCP tunnel server created successfully for container: %s", containerID)
 			}
 		} else if tunnelType == "http" {
 			// HTTP tunnel doesn't need a separate listener - it uses the main HTTP server
 			// The domain mapping is already set up in handleAuthenticate
-			log.Printf("[server] HTTP tunnel ready for container: %s (using main HTTP server on port %d)", containerID, port)
+			logger.Infof("[server] HTTP tunnel ready for container: %s (using main HTTP server on port %d)", containerID, port)
 		}
 	})
 
@@ -218,18 +218,18 @@ func (s *Server) Start() error {
 	// Get machine IP
 	ip, err := utils.GetMachineIP()
 	if err != nil {
-		log.Printf("[server] Failed to get machine IP: %v", err)
+		logger.Infof("[server] Failed to get machine IP: %v", err)
 		ip = "未知"
 	}
 
 	// Start HTTP server in a goroutine
 	go func() {
-		log.Printf("[server] Version: %s", inlets.Version)
-		log.Printf("[server] Starting HTTP server on port %s", s.httpServer.Addr)
+		logger.Infof("[server] Version: %s", inlets.Version)
+		logger.Infof("[server] Starting HTTP server on port %s", s.httpServer.Addr)
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[server] HTTP server error: %v", err)
+			logger.Infof("[server] HTTP server error: %v", err)
 		} else {
-			log.Printf("[server] HTTP server stopped")
+			logger.Infof("[server] HTTP server stopped")
 		}
 	}()
 
@@ -242,7 +242,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("port %s not reachable after start: %v", s.httpServer.Addr, err)
 	}
 	conn.Close()
-	log.Printf("[server] Verified: Port %s is accepting connections", s.httpServer.Addr)
+	logger.Infof("[server] Verified: Port %s is accepting connections", s.httpServer.Addr)
 
 	// Send notification
 	now := time.Now().Format("2006-01-02 15:04:05")
@@ -253,12 +253,12 @@ func (s *Server) Start() error {
 		fmt.Sprintf("当前时间：%s", now),
 	}
 	if err := s.notification.Notify(title, message); err != nil {
-		log.Printf("[server] Failed to send notification: %v", err)
+		logger.Infof("[server] Failed to send notification: %v", err)
 	}
 
-	log.Printf("[server] Server started successfully")
-	log.Printf("[server] HTTP server listening on %s", s.httpServer.Addr)
-	log.Printf("[server] TCP monitor listening on port %d", s.tcpMonitor.GetPort())
+	logger.Infof("[server] Server started successfully")
+	logger.Infof("[server] HTTP server listening on %s", s.httpServer.Addr)
+	logger.Infof("[server] TCP monitor listening on port %d", s.tcpMonitor.GetPort())
 
 	return nil
 }
@@ -305,14 +305,14 @@ func (s *Server) Stop() error {
 	// Close HTTP server
 	if s.httpServer != nil {
 		if err := s.httpServer.Close(); err != nil {
-			log.Printf("[server] Error closing HTTP server: %v", err)
+			logger.Infof("[server] Error closing HTTP server: %v", err)
 		}
 	}
 
 	// Close TCP monitor
 	if s.tcpMonitor != nil {
 		if err := s.tcpMonitor.Close(); err != nil {
-			log.Printf("[server] Error closing TCP monitor: %v", err)
+			logger.Infof("[server] Error closing TCP monitor: %v", err)
 		}
 	}
 

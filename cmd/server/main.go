@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/go-idp/inlets/internal/client"
 	"github.com/go-idp/inlets/internal/server"
+	"github.com/go-zoox/logger"
 	"github.com/go-idp/inlets/internal/server/limiter"
 	"github.com/go-idp/inlets/internal/server/types"
 )
@@ -161,10 +161,10 @@ func main() {
 	if configPath != "" {
 		loadedConfig, err := loadConfigFile(configPath)
 		if err != nil {
-			log.Printf("[server] Warning: Failed to load config file %s: %v", configPath, err)
+			logger.Infof("[server] Warning: Failed to load config file %s: %v", configPath, err)
 		} else if loadedConfig != nil {
 			configFile = loadedConfig
-			log.Printf("[server] Config file loaded: %s", configPath)
+			logger.Infof("[server] Config file loaded: %s", configPath)
 		}
 	}
 
@@ -303,14 +303,14 @@ func main() {
 		if _, err := os.Stat(configPath); err == nil {
 			watcher, err = fsnotify.NewWatcher()
 			if err != nil {
-				log.Printf("[server:config] Warning: Failed to create file watcher: %v", err)
+				logger.Infof("[server:config] Warning: Failed to create file watcher: %v", err)
 			} else {
 				if err := watcher.Add(configPath); err != nil {
-					log.Printf("[server:config] Warning: Failed to watch config file: %v", err)
+					logger.Infof("[server:config] Warning: Failed to watch config file: %v", err)
 					watcher.Close()
 					watcher = nil
 				} else {
-					log.Printf("[server:config] Watching config file: %s", configPath)
+					logger.Infof("[server:config] Watching config file: %s", configPath)
 				}
 			}
 		}
@@ -534,7 +534,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 				return
 			}
 			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Printf("[server:config] 检测到配置文件变化: %s", event.Name)
+				logger.Infof("[server:config] 检测到配置文件变化: %s", event.Name)
 
 				// Cancel previous timer if exists
 				if reloadTimer != nil {
@@ -550,7 +550,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 			if !ok {
 				return
 			}
-			log.Printf("[server:config] 文件监听出错: %v", err)
+			logger.Infof("[server:config] 文件监听出错: %v", err)
 		}
 	}
 }
@@ -571,7 +571,7 @@ func reloadConfig(configPath string, configRef *struct {
 	// Load new config
 	newConfig, err := loadConfigFile(configPath)
 	if err != nil {
-		log.Printf("[server:config] 热更新失败: %v", err)
+		logger.Infof("[server:config] 热更新失败: %v", err)
 		return
 	}
 
@@ -586,7 +586,7 @@ func reloadConfig(configPath string, configRef *struct {
 		newClientsCount = len(newConfig.Clients)
 	}
 
-	log.Printf("[server:config] 配置文件已热更新 (客户端数量: %d -> %d)", oldClientsCount, newClientsCount)
+	logger.Infof("[server:config] 配置文件已热更新 (客户端数量: %d -> %d)", oldClientsCount, newClientsCount)
 
 	// Build bandwidth limits from new config
 	var bandwidthLimits *limiter.ClientBandwidthLimits
@@ -622,7 +622,7 @@ func reloadConfig(configPath string, configRef *struct {
 
 	// Update server configuration
 	if err := srv.UpdateConfig(getToken, notificationConfig, bandwidthLimits); err != nil {
-		log.Printf("[server:config] 更新服务器配置失败: %v", err)
+		logger.Infof("[server:config] 更新服务器配置失败: %v", err)
 		return
 	}
 
@@ -637,9 +637,9 @@ func reloadConfig(configPath string, configRef *struct {
 		}
 		// Note: We can't directly access the notification instance here,
 		// but the UpdateConfig method should have updated it
-		log.Printf("[server:config] %s", title)
+		logger.Infof("[server:config] %s", title)
 		for _, msg := range message {
-			log.Printf("[server:config]   %s", msg)
+			logger.Infof("[server:config]   %s", msg)
 		}
 	}
 }

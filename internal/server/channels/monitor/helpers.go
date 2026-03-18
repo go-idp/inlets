@@ -4,10 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-zoox/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -45,7 +45,7 @@ func sendPong(wsConn *WebSocketConnection) {
 	}
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[monitor:ws] Failed to marshal pong message: %v", err)
+		logger.Infof("[monitor:ws] Failed to marshal pong message: %v", err)
 		return
 	}
 
@@ -55,7 +55,7 @@ func sendPong(wsConn *WebSocketConnection) {
 	wsConn.writeMu.Unlock()
 
 	if err != nil {
-		log.Printf("[monitor:ws] Failed to send pong message: %v", err)
+		logger.Infof("[monitor:ws] Failed to send pong message: %v", err)
 	}
 }
 
@@ -85,14 +85,14 @@ func sendAuthResponse(wsConn *WebSocketConnection, options *CreateWebSocketOptio
 	msg := []interface{}{"authenticate", response}
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[monitor:ws] Failed to marshal auth response: %v", err)
+		logger.Infof("[monitor:ws] Failed to marshal auth response: %v", err)
 		return
 	}
 	wsConn.writeMu.Lock()
 	err = wsConn.WriteMessage(websocket.TextMessage, msgBytes)
 	wsConn.writeMu.Unlock()
 	if err != nil {
-		log.Printf("[monitor:ws] Failed to send auth response: %v", err)
+		logger.Infof("[monitor:ws] Failed to send auth response: %v", err)
 	}
 }
 
@@ -121,7 +121,7 @@ func negotiateCapabilities(clientCapabilities *client.Capabilities) *client.Capa
 
 	// If no common capabilities, fallback to legacy
 	if negotiatedFlags == 0 {
-		log.Printf("[monitor:ws] No common capabilities found, falling back to legacy protocol")
+		logger.Infof("[monitor:ws] No common capabilities found, falling back to legacy protocol")
 		return nil
 	}
 

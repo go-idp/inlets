@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/go-idp/inlets/internal/client"
 	"github.com/go-idp/inlets/internal/server"
+	"github.com/go-zoox/logger"
 	"github.com/go-idp/inlets/internal/server/limiter"
 	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/urfave/cli/v2"
@@ -129,7 +129,7 @@ func Server() *cli.Command {
 			if configPath != "" {
 				loadedConfig, err := loadConfigFile(configPath)
 				if err != nil {
-					log.Printf("[server] Warning: Failed to load config file %s: %v", configPath, err)
+					logger.Infof("[server] Warning: Failed to load config file %s: %v", configPath, err)
 					return fmt.Errorf("failed to load config file: %v", err)
 				} else if loadedConfig != nil {
 					// Validate that Clients is not empty
@@ -137,7 +137,7 @@ func Server() *cli.Command {
 						return fmt.Errorf("config file %s: clients configuration is required and cannot be empty", configPath)
 					}
 					configFile = loadedConfig
-					log.Printf("[server] Config file loaded: %s", configPath)
+					logger.Infof("[server] Config file loaded: %s", configPath)
 				}
 			}
 
@@ -251,14 +251,14 @@ func Server() *cli.Command {
 				if _, err := os.Stat(configPath); err == nil {
 					watcher, err = fsnotify.NewWatcher()
 					if err != nil {
-						log.Printf("[server:config] Warning: Failed to create file watcher: %v", err)
+						logger.Infof("[server:config] Warning: Failed to create file watcher: %v", err)
 					} else {
 						if err := watcher.Add(configPath); err != nil {
-							log.Printf("[server:config] Warning: Failed to watch config file: %v", err)
+							logger.Infof("[server:config] Warning: Failed to watch config file: %v", err)
 							watcher.Close()
 							watcher = nil
 						} else {
-							log.Printf("[server:config] Watching config file: %s", configPath)
+							logger.Infof("[server:config] Watching config file: %s", configPath)
 						}
 					}
 				}
@@ -460,7 +460,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 				return
 			}
 			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Printf("[server:config] Config file changed detected: %s", event.Name)
+				logger.Infof("[server:config] Config file changed detected: %s", event.Name)
 
 				// Cancel previous timer if exists
 				if reloadTimer != nil {
@@ -476,7 +476,7 @@ func watchConfigFile(watcher *fsnotify.Watcher, configPath string, configRef *st
 			if !ok {
 				return
 			}
-			log.Printf("[server:config] File watcher error: %v", err)
+			logger.Infof("[server:config] File watcher error: %v", err)
 		}
 	}
 }
@@ -497,13 +497,13 @@ func reloadConfig(configPath string, configRef *struct {
 	// Load new config
 	newConfig, err := loadConfigFile(configPath)
 	if err != nil {
-		log.Printf("[server:config] Hot reload failed: %v", err)
+		logger.Infof("[server:config] Hot reload failed: %v", err)
 		return
 	}
 
 	// Validate that Clients is not empty
 	if newConfig == nil || len(newConfig.Clients) == 0 {
-		log.Printf("[server:config] Hot reload failed: clients configuration in config file %s cannot be empty", configPath)
+		logger.Infof("[server:config] Hot reload failed: clients configuration in config file %s cannot be empty", configPath)
 		return
 	}
 
@@ -515,7 +515,7 @@ func reloadConfig(configPath string, configRef *struct {
 	// Get new clients count (newConfig is guaranteed to be non-nil at this point)
 	newClientsCount := len(newConfig.Clients)
 
-	log.Printf("[server:config] Config file hot reloaded (client count: %d -> %d)", oldClientsCount, newClientsCount)
+	logger.Infof("[server:config] Config file hot reloaded (client count: %d -> %d)", oldClientsCount, newClientsCount)
 
 	// Build bandwidth limits from new config
 	var bandwidthLimits *limiter.ClientBandwidthLimits
@@ -551,7 +551,7 @@ func reloadConfig(configPath string, configRef *struct {
 
 	// Update server configuration
 	if err := srv.UpdateConfig(getToken, notificationConfig, bandwidthLimits); err != nil {
-		log.Printf("[server:config] Failed to update server configuration: %v", err)
+		logger.Infof("[server:config] Failed to update server configuration: %v", err)
 		return
 	}
 
@@ -566,9 +566,9 @@ func reloadConfig(configPath string, configRef *struct {
 		}
 		// Note: We can't directly access the notification instance here,
 		// but the UpdateConfig method should have updated it
-		log.Printf("[server:config] %s", title)
+		logger.Infof("[server:config] %s", title)
 		for _, msg := range message {
-			log.Printf("[server:config]   %s", msg)
+			logger.Infof("[server:config]   %s", msg)
 		}
 	}
 }

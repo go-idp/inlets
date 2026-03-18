@@ -3,7 +3,6 @@ package monitor
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-idp/inlets/internal/server/protocol"
 	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/go-idp/inlets/internal/server/utils"
+	"github.com/go-zoox/logger"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -43,13 +43,13 @@ func handleAuthenticate(
 		clientId = fmt.Sprintf("anonymous-%s", uuid.New().String()[:8])
 	}
 
-	log.Printf("[monitor:ws][%s] version: %s", clientId, auth.Version)
+	logger.Infof("[monitor:ws][%s] version: %s", clientId, auth.Version)
 
 	// Version check (warning only)
 	clientVersion := auth.Version
 	serverVersion := options.Version
 	if !utils.IsVersionGreaterOrEqual(clientVersion, serverVersion) {
-		log.Printf("[monitor:ws] Warning: client version(%s) should be >= server(%s)", clientVersion, serverVersion)
+		logger.Infof("[monitor:ws] Warning: client version(%s) should be >= server(%s)", clientVersion, serverVersion)
 		// Send warning
 		warnMsg := []interface{}{
 			"warn",
@@ -96,7 +96,7 @@ func handleAuthenticate(
 		return fmt.Errorf("invalid signature")
 	}
 
-	log.Printf("[monitor:ws][%s] type: %s", clientId, auth.Type)
+	logger.Infof("[monitor:ws][%s] type: %s", clientId, auth.Type)
 
 	// Capability negotiation
 	negotiatedCapabilities := negotiateCapabilities(auth.Capabilities)
@@ -104,11 +104,11 @@ func handleAuthenticate(
 
 	protocolSummary := formatProtocolConfiguration(negotiatedCapabilities)
 	if useNewProtocol {
-		log.Printf("[monitor:ws][%s] Using new protocol", clientId)
+		logger.Infof("[monitor:ws][%s] Using new protocol", clientId)
 	} else {
-		log.Printf("[monitor:ws][%s] Using legacy protocol", clientId)
+		logger.Infof("[monitor:ws][%s] Using legacy protocol", clientId)
 	}
-	log.Printf("[monitor:ws][%s] protocol configuration => %s", clientId, protocolSummary)
+	logger.Infof("[monitor:ws][%s] protocol configuration => %s", clientId, protocolSummary)
 
 	// Save capabilities to connection
 	wsConn.mu.Lock()
@@ -129,7 +129,7 @@ func handleAuthenticate(
 	// Handle tunnel type
 	if auth.Type == "tcp" {
 		if auth.TunnelPort != 0 {
-			log.Printf("[monitor:ws][%s] tunnel port: %d", clientId, auth.TunnelPort)
+			logger.Infof("[monitor:ws][%s] tunnel port: %d", clientId, auth.TunnelPort)
 		}
 
 		ctx.Container.Create(containerId, options.Token, wsConn.Conn, &auth, &wsConn.writeMu)
@@ -141,10 +141,10 @@ func handleAuthenticate(
 		wsConn.mu.RUnlock()
 
 		if err := ctx.Container.Set(containerId, "adapter", adapter); err != nil {
-			log.Printf("[monitor:ws] Failed to set adapter in container: %v", err)
+			logger.Infof("[monitor:ws] Failed to set adapter in container: %v", err)
 		}
 		if err := ctx.Container.Set(containerId, "useNewProtocol", useNewProtocol); err != nil {
-			log.Printf("[monitor:ws] Failed to set useNewProtocol in container: %v", err)
+			logger.Infof("[monitor:ws] Failed to set useNewProtocol in container: %v", err)
 		}
 
 	} else if auth.Type == "http" {
@@ -160,7 +160,7 @@ func handleAuthenticate(
 			if auth.SubDomain == "" {
 				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, "", clientId, adapter, useNewProtocol)
 			} else {
-				log.Printf("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
+				logger.Infof("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
 
 				if ctx.DomainMappings.Has(auth.SubDomain) {
 					sendAuthResponse(wsConn, options, false, "domain id has been used, please use another", "", nil)
@@ -173,7 +173,7 @@ func handleAuthenticate(
 			if auth.SubDomain == "" {
 				*subDomain = ctx.DomainMappings.BindWS(wsConn.Conn, "")
 			} else {
-				log.Printf("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
+				logger.Infof("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
 
 				if ctx.DomainMappings.Has(auth.SubDomain) {
 					sendAuthResponse(wsConn, options, false, "domain id has been used, please use another", "", nil)
@@ -184,7 +184,7 @@ func handleAuthenticate(
 			}
 		}
 
-		log.Printf("[monitor:ws][%s][domain] %s.%s", clientId, *subDomain, options.Domain)
+		logger.Infof("[monitor:ws][%s][domain] %s.%s", clientId, *subDomain, options.Domain)
 	} else {
 		return fmt.Errorf("unknown authentication type: %s", auth.Type)
 	}
@@ -210,7 +210,7 @@ func handleAuthenticate(
 	url := getServerUrlBySubDomain(*subDomain, options)
 	sendAuthResponse(wsConn, options, true, "", url, config)
 
-	log.Printf("[monitor:ws][%s] authenticated successfully (container: %s)", clientId, containerId)
+	logger.Infof("[monitor:ws][%s] authenticated successfully (container: %s)", clientId, containerId)
 
 	// Set start time for traffic stats
 	ctx.TrafficStats.SetStartTime(clientId)
@@ -307,7 +307,7 @@ func handleDisconnect(ctx *types.Context, options *CreateWebSocketOptions, wsCon
 
 	// Get stats
 	statsInfo := ctx.TrafficStats.FormatStats(clientId)
-	log.Printf("[monitor:ws][%s] disconnected - Traffic Stats: %s", clientId, statsInfo)
+	logger.Infof("[monitor:ws][%s] disconnected - Traffic Stats: %s", clientId, statsInfo)
 
 	// Unbind domain mapping
 	if subDomain != "" {
@@ -317,7 +317,7 @@ func handleDisconnect(ctx *types.Context, options *CreateWebSocketOptions, wsCon
 	// Get container for notification
 	container := ctx.Container.Get(containerId)
 	if container == nil {
-		log.Printf("[monitor:ws] Cannot get container id: %s", containerId)
+		logger.Infof("[monitor:ws] Cannot get container id: %s", containerId)
 		return
 	}
 
@@ -348,6 +348,6 @@ func handleDisconnect(ctx *types.Context, options *CreateWebSocketOptions, wsCon
 	// Cleanup container (this will close TCP server and release port)
 	if container.Destroy != nil {
 		container.Destroy()
-		log.Printf("[monitor:ws][%s] Container destroyed, TCP server closed and port released", clientId)
+		logger.Infof("[monitor:ws][%s] Container destroyed, TCP server closed and port released", clientId)
 	}
 }

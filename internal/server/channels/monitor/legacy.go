@@ -2,10 +2,10 @@ package monitor
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
+	"github.com/go-zoox/logger"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -15,11 +15,11 @@ import (
 func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[monitor:ws:legacy] Failed to upgrade connection: %v", err)
+		logger.Infof("[monitor:ws:legacy] Failed to upgrade connection: %v", err)
 		return
 	}
 
-	log.Printf("[monitor:ws:legacy] New WebSocket connection from %s", conn.RemoteAddr())
+	logger.Infof("[monitor:ws:legacy] New WebSocket connection from %s", conn.RemoteAddr())
 
 	wsConn := &WebSocketConnection{
 		Conn: conn,
@@ -40,7 +40,7 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 	// Authentication timeout: 10 seconds
 	authTimeout := time.AfterFunc(10*time.Second, func() {
 		if !isAuthenticated {
-			log.Printf("[monitor:ws:legacy] Connection removed without authorization")
+			logger.Infof("[monitor:ws:legacy] Connection removed without authorization")
 			conn.Close()
 		}
 	})
@@ -50,7 +50,7 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 		defer conn.Close()
 		defer authTimeout.Stop()
 
-		log.Printf("[monitor:ws:legacy] Starting message reading loop for %s", conn.RemoteAddr())
+		logger.Infof("[monitor:ws:legacy] Starting message reading loop for %s", conn.RemoteAddr())
 		for {
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
@@ -58,18 +58,18 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 				// When connection is closed, ReadMessage returns an error, but this is expected behavior
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure) {
 					// Any close error (normal or abnormal) - connection is already closed, just log as info
-					log.Printf("[monitor:ws:legacy] Connection closed: %v", err)
+					logger.Infof("[monitor:ws:legacy] Connection closed: %v", err)
 				} else if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure) {
 					// Unexpected close code, but still a close error - log as info
-					log.Printf("[monitor:ws:legacy] Connection closed: %v", err)
+					logger.Infof("[monitor:ws:legacy] Connection closed: %v", err)
 				} else {
 					// Check if it's a CloseError by type assertion
 					if _, ok := err.(*websocket.CloseError); ok {
 						// It's a CloseError but not in the expected codes - still a close, log as info
-						log.Printf("[monitor:ws:legacy] Connection closed: %v", err)
+						logger.Infof("[monitor:ws:legacy] Connection closed: %v", err)
 					} else {
 						// Non-close error (e.g., network error, read error) - this is a real error
-						log.Printf("[monitor:ws:legacy] ReadMessage error: %v", err)
+						logger.Infof("[monitor:ws:legacy] ReadMessage error: %v", err)
 					}
 				}
 				if isAuthenticated {
@@ -78,23 +78,23 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 				return
 			}
 
-			// log.Printf("[monitor:ws:legacy] Received message: type=%d, len=%d", messageType, len(message))
+			// logger.Infof("[monitor:ws:legacy] Received message: type=%d, len=%d", messageType, len(message))
 			if messageType == websocket.TextMessage {
 				// Parse JSON message: ["event", payload]
 				var msgArray []interface{}
 				if err := json.Unmarshal(message, &msgArray); err != nil {
-					log.Printf("[monitor:ws:legacy] Failed to parse JSON message: %v, raw: %s", err, string(message))
+					logger.Infof("[monitor:ws:legacy] Failed to parse JSON message: %v, raw: %s", err, string(message))
 					continue
 				}
 
 				if len(msgArray) < 1 {
-					log.Printf("[monitor:ws:legacy] Empty message array")
+					logger.Infof("[monitor:ws:legacy] Empty message array")
 					continue
 				}
 
 				event, ok := msgArray[0].(string)
 				if !ok {
-					log.Printf("[monitor:ws:legacy] Event is not a string: %v (type: %T)", msgArray[0], msgArray[0])
+					logger.Infof("[monitor:ws:legacy] Event is not a string: %v (type: %T)", msgArray[0], msgArray[0])
 					continue
 				}
 
@@ -117,7 +117,7 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 				case "authenticate":
 					authTimeout.Stop()
 					if err := handleAuthenticate(h.ctx, h.options, h.emitter, wsConn, payload, &isAuthenticated, &subDomain); err != nil {
-						log.Printf("[monitor:ws:legacy] Authentication failed: %v", err)
+						logger.Infof("[monitor:ws:legacy] Authentication failed: %v", err)
 						conn.Close()
 						return
 					}
@@ -155,7 +155,7 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 						}
 					}
 				default:
-					log.Printf("[monitor:ws:legacy] Unhandled event: %s (payload type: %T)", event, payload)
+					logger.Infof("[monitor:ws:legacy] Unhandled event: %s (payload type: %T)", event, payload)
 				}
 			}
 		}

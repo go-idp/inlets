@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-zoox/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -274,7 +274,7 @@ func (a *BinaryProtocolAdapter) setupEventListeners() {
 						previewLen = len(message)
 					}
 					previewHex := hex.EncodeToString(message[:previewLen])
-					log.Printf("[protocol:binary] Failed to parse binary message in message loop: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(message), previewLen, previewHex)
+					logger.Infof("[protocol:binary] Failed to parse binary message in message loop: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(message), previewLen, previewHex)
 					continue
 				}
 
@@ -313,7 +313,7 @@ func (a *BinaryProtocolAdapter) setupEventListeners() {
 							// Decode base64
 							messageBuffer, err := base64.StdEncoding.DecodeString(dataStr)
 							if err != nil {
-								log.Printf("[protocol:binary] Failed to decode base64 message: %v", err)
+								logger.Infof("[protocol:binary] Failed to decode base64 message: %v", err)
 								continue
 							}
 							binaryMsg, err := ParseBinaryMessage(messageBuffer)
@@ -324,7 +324,7 @@ func (a *BinaryProtocolAdapter) setupEventListeners() {
 									previewLen = len(messageBuffer)
 								}
 								previewHex := hex.EncodeToString(messageBuffer[:previewLen])
-								log.Printf("[protocol:binary] Failed to parse binary message from base64 text: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(messageBuffer), previewLen, previewHex)
+								logger.Infof("[protocol:binary] Failed to parse binary message from base64 text: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(messageBuffer), previewLen, previewHex)
 								continue
 							}
 							a.handleBinaryMessage(binaryMsg)
@@ -346,7 +346,7 @@ func (a *BinaryProtocolAdapter) HandleBinaryMessage(message []byte) error {
 			previewLen = len(message)
 		}
 		previewHex := hex.EncodeToString(message[:previewLen])
-		log.Printf("[protocol:binary] Failed to parse binary message: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(message), previewLen, previewHex)
+		logger.Infof("[protocol:binary] Failed to parse binary message: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(message), previewLen, previewHex)
 		return fmt.Errorf("failed to parse binary message: %w", err)
 	}
 	return a.handleBinaryMessage(binaryMsg)

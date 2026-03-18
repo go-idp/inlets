@@ -3,11 +3,11 @@ package monitor
 import (
 	"encoding/base64"
 	"encoding/json"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-idp/inlets/internal/server/tunnel"
+	"github.com/go-zoox/logger"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -17,11 +17,11 @@ import (
 func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[monitor:ws] Failed to upgrade connection: %v", err)
+		logger.Infof("[monitor:ws] Failed to upgrade connection: %v", err)
 		return
 	}
 
-	log.Printf("[monitor:ws] New WebSocket connection from %s", conn.RemoteAddr())
+	logger.Infof("[monitor:ws] New WebSocket connection from %s", conn.RemoteAddr())
 
 	wsConn := &WebSocketConnection{
 		Conn: conn,
@@ -42,7 +42,7 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 	// Authentication timeout: 10 seconds
 	authTimeout := time.AfterFunc(10*time.Second, func() {
 		if !isAuthenticated {
-			log.Printf("[monitor:ws] Connection removed without authorization")
+			logger.Infof("[monitor:ws] Connection removed without authorization")
 			conn.Close()
 		}
 	})
@@ -52,7 +52,7 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 		defer conn.Close()
 		defer authTimeout.Stop()
 
-		log.Printf("[monitor:ws] Starting message reading loop for %s", conn.RemoteAddr())
+		logger.Infof("[monitor:ws] Starting message reading loop for %s", conn.RemoteAddr())
 		for {
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
@@ -60,18 +60,18 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 				// When connection is closed, ReadMessage returns an error, but this is expected behavior
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure) {
 					// Any close error (normal or abnormal) - connection is already closed, just log as info
-					log.Printf("[monitor:ws] Connection closed: %v", err)
+					logger.Infof("[monitor:ws] Connection closed: %v", err)
 				} else if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure) {
 					// Unexpected close code, but still a close error - log as info
-					log.Printf("[monitor:ws] Connection closed: %v", err)
+					logger.Infof("[monitor:ws] Connection closed: %v", err)
 				} else {
 					// Check if it's a CloseError by type assertion
 					if _, ok := err.(*websocket.CloseError); ok {
 						// It's a CloseError but not in the expected codes - still a close, log as info
-						log.Printf("[monitor:ws] Connection closed: %v", err)
+						logger.Infof("[monitor:ws] Connection closed: %v", err)
 					} else {
 						// Non-close error (e.g., network error, read error) - this is a real error
-						log.Printf("[monitor:ws] ReadMessage error: %v", err)
+						logger.Infof("[monitor:ws] ReadMessage error: %v", err)
 					}
 				}
 				if isAuthenticated {
@@ -80,7 +80,7 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 				return
 			}
 
-			// log.Printf("[monitor:ws] Received message: type=%d, len=%d", messageType, len(message))
+			// logger.Infof("[monitor:ws] Received message: type=%d, len=%d", messageType, len(message))
 			if messageType == websocket.BinaryMessage {
 				// Handle binary messages for new protocol
 				if isAuthenticated {
@@ -100,18 +100,18 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 				// Parse JSON message: ["event", payload]
 				var msgArray []interface{}
 				if err := json.Unmarshal(message, &msgArray); err != nil {
-					log.Printf("[monitor:ws] Failed to parse JSON message: %v, raw: %s", err, string(message))
+					logger.Infof("[monitor:ws] Failed to parse JSON message: %v, raw: %s", err, string(message))
 					continue
 				}
 
 				if len(msgArray) < 1 {
-					log.Printf("[monitor:ws] Empty message array")
+					logger.Infof("[monitor:ws] Empty message array")
 					continue
 				}
 
 				event, ok := msgArray[0].(string)
 				if !ok {
-					log.Printf("[monitor:ws] Event is not a string: %v (type: %T)", msgArray[0], msgArray[0])
+					logger.Infof("[monitor:ws] Event is not a string: %v (type: %T)", msgArray[0], msgArray[0])
 					continue
 				}
 
@@ -130,7 +130,7 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 				case "authenticate":
 					authTimeout.Stop()
 					if err := handleAuthenticate(h.ctx, h.options, h.emitter, wsConn, payload, &isAuthenticated, &subDomain); err != nil {
-						log.Printf("[monitor:ws] Authentication failed: %v", err)
+						logger.Infof("[monitor:ws] Authentication failed: %v", err)
 						conn.Close()
 						return
 					}
@@ -166,7 +166,7 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 				case "tcp:data":
 					// New protocol: tcp:data should NOT come through monitor channel
 					// It should come through data channel instead
-					log.Printf("[monitor:ws] Warning: received tcp:data on monitor channel (should come from data channel)")
+					logger.Infof("[monitor:ws] Warning: received tcp:data on monitor channel (should come from data channel)")
 				case "data:channel:ready":
 					// Client notifies that data channel is ready for a specific stream
 					var streamID string
@@ -177,12 +177,12 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 					}
 					if streamID != "" {
 						tunnel.NotifyDataChannelReady(streamID)
-						log.Printf("[monitor:ws] Data channel ready confirmed for stream: %s", streamID)
+						logger.Infof("[monitor:ws] Data channel ready confirmed for stream: %s", streamID)
 					} else {
-						log.Printf("[monitor:ws] data:channel:ready missing streamId")
+						logger.Infof("[monitor:ws] data:channel:ready missing streamId")
 					}
 				default:
-					log.Printf("[monitor:ws] Unhandled monitor event: %s (payload type: %T)", event, payload)
+					logger.Infof("[monitor:ws] Unhandled monitor event: %s (payload type: %T)", event, payload)
 				}
 			}
 		}

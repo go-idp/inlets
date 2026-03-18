@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"regexp"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/go-idp/inlets/internal/server/protocol"
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-zoox/logger"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -72,7 +72,7 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 
 		conn, _, err := hijacker.Hijack()
 		if err != nil {
-			log.Printf("[tunnel:http] Failed to hijack connection: %v", err)
+			logger.Infof("[tunnel:http] Failed to hijack connection: %v", err)
 			return
 		}
 
@@ -102,7 +102,7 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			if socketConfig.subDomain != "" {
 				subDomainInfo = fmt.Sprintf("[%s]", socketConfig.subDomain)
 			}
-			log.Printf("[tunnel:http]%s connection closed - Traffic Stats: %s", subDomainInfo, statsInfo)
+			logger.Infof("[tunnel:http]%s connection closed - Traffic Stats: %s", subDomainInfo, statsInfo)
 		}
 	}()
 
@@ -126,7 +126,7 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			bodyData, err = io.ReadAll(req.Body)
 			_ = req.Body.Close()
 			if err != nil {
-				log.Printf("[tunnel:http] Error reading request body: %v", err)
+				logger.Infof("[tunnel:http] Error reading request body: %v", err)
 				return
 			}
 		}
@@ -143,7 +143,7 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 		// Process the request
 		data := requestData.String()
 		if err := t.processRequest(tcpConn, socketConfig, data, req); err != nil {
-			log.Printf("[tunnel:http] Error processing request: %v", err)
+			logger.Infof("[tunnel:http] Error processing request: %v", err)
 			// Don't return, continue to next request if keep-alive
 			if req.Close {
 				return
@@ -199,7 +199,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	requestLog := fmt.Sprintf("[%s.%s][request: %d]", socketConfig.subDomain, t.domain, requestCount)
 
 	if socketConfig.subDomain == "" {
-		log.Printf("[404]%s", requestLog)
+		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
 		return fmt.Errorf("no subdomain found")
 	}
@@ -207,7 +207,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	// Get domain mapping
 	domainMapping := t.ctx.DomainMappings.Get(socketConfig.subDomain)
 	if domainMapping == nil {
-		log.Printf("[404]%s", requestLog)
+		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
 		return fmt.Errorf("domain mapping not found")
 	}
@@ -218,12 +218,12 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 	wsConn := domainMapping.WSSocket
 	if wsConn == nil {
-		log.Printf("[404]%s", requestLog)
+		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
 		return fmt.Errorf("websocket connection not found")
 	}
 
-	log.Printf("%s", requestLog)
+	logger.Infof("%s", requestLog)
 
 	// Generate request ID
 	requestID := fmt.Sprintf("%s@%d", uuid.New().String(), time.Now().UnixMilli())
@@ -248,7 +248,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 	// Check upload bandwidth limit
 	if !t.ctx.BandwidthLimiter.CheckUpload(clientID, requestBytes) {
-		log.Printf("[tunnel:http][%s] Upload bandwidth limit exceeded for client: %s", socketConfig.subDomain, clientID)
+		logger.Infof("[tunnel:http][%s] Upload bandwidth limit exceeded for client: %s", socketConfig.subDomain, clientID)
 		destroyConnection(tcpConn)
 		return fmt.Errorf("upload bandwidth limit exceeded")
 	}
@@ -276,7 +276,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 		// Check download bandwidth limit
 		if !t.ctx.BandwidthLimiter.CheckDownload(clientID, responseBytesLen) {
-			log.Printf("[tunnel:http][%s] Download bandwidth limit exceeded for client: %s", socketConfig.subDomain, clientID)
+			logger.Infof("[tunnel:http][%s] Download bandwidth limit exceeded for client: %s", socketConfig.subDomain, clientID)
 			destroyConnection(tcpConn)
 			return
 		}
@@ -286,7 +286,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 		// Write response to TCP connection
 		if _, err := tcpConn.Write(responseBytes); err != nil {
-			log.Printf("[tunnel:http] Failed to write response: %v", err)
+			logger.Infof("[tunnel:http] Failed to write response: %v", err)
 			destroyConnection(tcpConn)
 			return
 		}
@@ -298,7 +298,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		// Ensure timeout response is sent at most once.
 		timeoutCallback := t.ctx.CallbackContainer.Take(socketConfig.tcpID, requestID)
 		if timeoutCallback != nil {
-			log.Printf("[tunnel:http][%s] request timeout (id: %s)", socketConfig.subDomain, id)
+			logger.Infof("[tunnel:http][%s] request timeout (id: %s)", socketConfig.subDomain, id)
 			timeoutCallback(buildGatewayTimeoutResponse())
 		}
 	})
@@ -310,7 +310,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		}
 		// Remove callback if request dispatch fails.
 		t.ctx.CallbackContainer.Take(socketConfig.tcpID, requestID)
-		log.Printf("[tunnel:http] Failed to send HTTP request: %v", err)
+		logger.Infof("[tunnel:http] Failed to send HTTP request: %v", err)
 		destroyConnection(tcpConn)
 		return err
 	}

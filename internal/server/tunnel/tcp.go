@@ -3,13 +3,13 @@ package tunnel
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/go-idp/inlets/internal/server/protocol"
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-zoox/logger"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -53,7 +53,7 @@ func (t *TCPTunnel) CreateServer(options Options) error {
 
 	// Check if TCP server already exists for this container
 	if container.SourceServer != nil {
-		log.Printf("[tunnel:tcp   ] TCP server already exists for container: %s, skipping creation", containerID)
+		logger.Infof("[tunnel:tcp   ] TCP server already exists for container: %s, skipping creation", containerID)
 		return nil
 	}
 
@@ -122,7 +122,7 @@ func (t *TCPTunnel) createSourceTCPServer(
 		return fmt.Errorf("failed to set source server: %v", err)
 	}
 
-	log.Printf("[tunnel:tcp   ] listen at 0.0.0.0:%d", port)
+	logger.Infof("[tunnel:tcp   ] listen at 0.0.0.0:%d", port)
 
 	// Accept connections in a goroutine
 	go func() {
@@ -151,7 +151,7 @@ func (t *TCPTunnel) handleSourceConnection(
 ) {
 	// Generate request ID
 	requestID := uuid.New().String()
-	log.Printf("[tunnel:tcp   ][user][request][start] request id: %s, ip: %s", requestID, conn.RemoteAddr())
+	logger.Infof("[tunnel:tcp   ][user][request][start] request id: %s, ip: %s", requestID, conn.RemoteAddr())
 
 	// Register request
 	t.ctx.Container.RegisterRequest(containerID, requestID, &conn)
@@ -171,7 +171,7 @@ func (t *TCPTunnel) handleSourceConnection(
 	// For new protocol, ensure per-stream data channel is open before setting up stream
 	if useNewProtocol && adapter != nil {
 		if err := t.ensureDataChannelForStream(containerID, streamID, requestID, container); err != nil {
-			log.Printf("[tunnel:tcp   ] Failed to ensure data channel for stream %s: %v", streamID, err)
+			logger.Infof("[tunnel:tcp   ] Failed to ensure data channel for stream %s: %v", streamID, err)
 			conn.Close()
 			return
 		}
@@ -191,7 +191,7 @@ func (t *TCPTunnel) handleSourceConnection(
 	}
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("[tunnel:tcp   ] Failed to marshal tcp:connect message: %v", err)
+		logger.Infof("[tunnel:tcp   ] Failed to marshal tcp:connect message: %v", err)
 		conn.Close()
 		return
 	}
@@ -202,7 +202,7 @@ func (t *TCPTunnel) handleSourceConnection(
 		defer container.WriteMu.Unlock()
 	}
 	if err := container.WSSocket.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
-		log.Printf("[tunnel:tcp   ] Failed to send tcp:connect message: %v", err)
+		logger.Infof("[tunnel:tcp   ] Failed to send tcp:connect message: %v", err)
 		conn.Close()
 		return
 	}
@@ -258,7 +258,7 @@ func (t *TCPTunnel) ensureDataChannelForStream(containerID, streamID, requestID 
 		return fmt.Errorf("failed to send data:channel:open message: %v", err)
 	}
 
-	log.Printf("[tunnel:tcp   ] Requested client to open data channel for stream: %s", streamID)
+	logger.Infof("[tunnel:tcp   ] Requested client to open data channel for stream: %s", streamID)
 
 	// Wait for data channel to be ready (with timeout)
 	timeout := time.After(10 * time.Second)
@@ -272,7 +272,7 @@ func (t *TCPTunnel) ensureDataChannelForStream(containerID, streamID, requestID 
 			dataChannelReadyMu.Lock()
 			delete(dataChannelReadyChan, streamID)
 			dataChannelReadyMu.Unlock()
-			log.Printf("[tunnel:tcp   ] Data channel is ready for stream: %s", streamID)
+			logger.Infof("[tunnel:tcp   ] Data channel is ready for stream: %s", streamID)
 			return nil
 		case <-ticker.C:
 			// Check if data channel is already set (in case ready message was missed)
@@ -284,7 +284,7 @@ func (t *TCPTunnel) ensureDataChannelForStream(containerID, streamID, requestID 
 					dataChannelReadyMu.Lock()
 					delete(dataChannelReadyChan, streamID)
 					dataChannelReadyMu.Unlock()
-					log.Printf("[tunnel:tcp   ] Data channel is ready (detected) for stream: %s", streamID)
+					logger.Infof("[tunnel:tcp   ] Data channel is ready (detected) for stream: %s", streamID)
 					return nil
 				}
 			}
@@ -351,7 +351,7 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 
 			// Log stats
 			statsInfo := t.ctx.TrafficStats.FormatStats(clientID)
-			log.Printf("[tunnel:tcp   ][%s] connection closed - Traffic Stats: %s", streamID, statsInfo)
+			logger.Infof("[tunnel:tcp   ][%s] connection closed - Traffic Stats: %s", streamID, statsInfo)
 		}()
 
 		buf := make([]byte, 32*1024) // 32KB buffer
@@ -370,11 +370,11 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 
 			// Check upload bandwidth limit
 			if !t.ctx.BandwidthLimiter.CheckUpload(clientID, int64(n)) {
-				log.Printf("[tunnel:tcp   ][%s] Upload bandwidth limit exceeded for client: %s", streamID, clientID)
+				logger.Infof("[tunnel:tcp   ][%s] Upload bandwidth limit exceeded for client: %s", streamID, clientID)
 				// Wait a bit and retry
 				time.Sleep(100 * time.Millisecond)
 				if !t.ctx.BandwidthLimiter.CheckUpload(clientID, int64(n)) {
-					log.Printf("[tunnel:tcp   ][%s] Upload bandwidth limit still exceeded, dropping data", streamID)
+					logger.Infof("[tunnel:tcp   ][%s] Upload bandwidth limit still exceeded, dropping data", streamID)
 					continue
 				}
 			}
@@ -385,7 +385,7 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 			// Send TCP data via adapter
 			// The adapter will automatically use data channel if available (for new protocol)
 			if err := adapter.SendTCPData(streamID, data); err != nil {
-				log.Printf("[tunnel:tcp   ][%s] Failed to send TCP data over WebSocket: %v", streamID, err)
+				logger.Infof("[tunnel:tcp   ][%s] Failed to send TCP data over WebSocket: %v", streamID, err)
 				return
 			}
 		}
@@ -408,11 +408,11 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 
 		// Check download bandwidth limit
 		if !t.ctx.BandwidthLimiter.CheckDownload(clientID, int64(len(data))) {
-			log.Printf("[tunnel:tcp   ][%s] Download bandwidth limit exceeded for client: %s", streamID, clientID)
+			logger.Infof("[tunnel:tcp   ][%s] Download bandwidth limit exceeded for client: %s", streamID, clientID)
 			// Wait a bit and retry
 			time.Sleep(100 * time.Millisecond)
 			if !t.ctx.BandwidthLimiter.CheckDownload(clientID, int64(len(data))) {
-				log.Printf("[tunnel:tcp   ][%s] Download bandwidth limit still exceeded, dropping data", streamID)
+				logger.Infof("[tunnel:tcp   ][%s] Download bandwidth limit still exceeded, dropping data", streamID)
 				return nil
 			}
 		}
@@ -422,7 +422,7 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 
 		// Write to source connection
 		if _, err := sourceConn.Write(data); err != nil {
-			log.Printf("[tunnel:tcp   ][%s] Failed to write to source socket: %v", streamID, err)
+			logger.Infof("[tunnel:tcp   ][%s] Failed to write to source socket: %v", streamID, err)
 			// Mark connection as closed
 			uploadMu.Lock()
 			sourceConnClosed = true

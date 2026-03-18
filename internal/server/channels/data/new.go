@@ -1,11 +1,11 @@
 package data
 
 import (
-	"log"
 	"net/http"
 	"sync"
 
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-zoox/logger"
 	"github.com/gorilla/websocket"
 )
 
@@ -37,7 +37,7 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 	streamId := r.URL.Query().Get("streamId")
 
 	if clientId == "" || containerId == "" || streamId == "" {
-		log.Printf("[monitor:ws:data] Missing clientId/containerId/streamId in query parameters")
+		logger.Infof("[monitor:ws:data] Missing clientId/containerId/streamId in query parameters")
 		http.Error(w, "Missing clientId, containerId or streamId", http.StatusBadRequest)
 		return
 	}
@@ -45,25 +45,25 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 	// Verify container exists
 	container := h.ctx.Container.Get(containerId)
 	if container == nil {
-		log.Printf("[monitor:ws:data] Container not found: %s", containerId)
+		logger.Infof("[monitor:ws:data] Container not found: %s", containerId)
 		http.Error(w, "Container not found", http.StatusNotFound)
 		return
 	}
 
 	// Verify clientId matches
 	if container.ClientId != clientId {
-		log.Printf("[monitor:ws:data] ClientId mismatch: expected %s, got %s", container.ClientId, clientId)
+		logger.Infof("[monitor:ws:data] ClientId mismatch: expected %s, got %s", container.ClientId, clientId)
 		http.Error(w, "ClientId mismatch", http.StatusForbidden)
 		return
 	}
 
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[monitor:ws:data] Failed to upgrade connection: %v", err)
+		logger.Infof("[monitor:ws:data] Failed to upgrade connection: %v", err)
 		return
 	}
 
-	log.Printf("[monitor:ws:data] New data channel connection: clientId=%s, containerId=%s, streamId=%s", clientId, containerId, streamId)
+	logger.Infof("[monitor:ws:data] New data channel connection: clientId=%s, containerId=%s, streamId=%s", clientId, containerId, streamId)
 
 	// Store data channel connection in container (per stream)
 	dataWriteMu := &sync.Mutex{}
@@ -81,12 +81,12 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 			RemoveDataChannelForStream(streamId string)
 		}); ok {
 			binaryAdapter.SetDataChannelForStream(streamId, conn, dataWriteMu)
-			log.Printf("[monitor:ws:data] Data channel set in adapter for stream: %s", streamId)
+			logger.Infof("[monitor:ws:data] Data channel set in adapter for stream: %s", streamId)
 		} else {
-			log.Printf("[monitor:ws:data] Warning: adapter does not support per-stream data channel for container: %s", containerId)
+			logger.Infof("[monitor:ws:data] Warning: adapter does not support per-stream data channel for container: %s", containerId)
 		}
 	} else if container.UseNewProtocol {
-		log.Printf("[monitor:ws:data] Warning: adapter not found in container: %s (data channel will not be used)", containerId)
+		logger.Infof("[monitor:ws:data] Warning: adapter not found in container: %s (data channel will not be used)", containerId)
 	}
 
 	// Handle data channel messages
@@ -96,7 +96,7 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 // handleConnection handles messages from data channel
 func (h *WebSocketDataChannelHandler) handleConnection(conn *websocket.Conn, containerId, streamId string, container *types.TunnelMapping) {
 	defer func() {
-		log.Printf("[monitor:ws:data] Data channel disconnected for container: %s streamId: %s", containerId, streamId)
+		logger.Infof("[monitor:ws:data] Data channel disconnected for container: %s streamId: %s", containerId, streamId)
 		if container.DataMu != nil {
 			container.DataMu.Lock()
 			delete(container.DataSockets, streamId)
@@ -113,7 +113,7 @@ func (h *WebSocketDataChannelHandler) handleConnection(conn *websocket.Conn, con
 		conn.Close()
 	}()
 
-	log.Printf("[monitor:ws:data] Starting data channel message loop for container: %s", containerId)
+	logger.Infof("[monitor:ws:data] Starting data channel message loop for container: %s", containerId)
 
 	for {
 		messageType, message, err := conn.ReadMessage()
@@ -122,18 +122,18 @@ func (h *WebSocketDataChannelHandler) handleConnection(conn *websocket.Conn, con
 			// When connection is closed, ReadMessage returns an error, but this is expected behavior
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure) {
 				// Any close error (normal or abnormal) - connection is already closed, just log as info
-				log.Printf("[monitor:ws:data] Data channel closed for container %s: %v", containerId, err)
+				logger.Infof("[monitor:ws:data] Data channel closed for container %s: %v", containerId, err)
 			} else if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived, websocket.CloseAbnormalClosure) {
 				// Unexpected close code, but still a close error - log as info
-				log.Printf("[monitor:ws:data] Data channel closed for container %s: %v", containerId, err)
+				logger.Infof("[monitor:ws:data] Data channel closed for container %s: %v", containerId, err)
 			} else {
 				// Check if it's a CloseError by type assertion
 				if _, ok := err.(*websocket.CloseError); ok {
 					// It's a CloseError but not in the expected codes - still a close, log as info
-					log.Printf("[monitor:ws:data] Data channel closed for container %s: %v", containerId, err)
+					logger.Infof("[monitor:ws:data] Data channel closed for container %s: %v", containerId, err)
 				} else {
 					// Non-close error (e.g., network error, read error) - this is a real error
-					log.Printf("[monitor:ws:data] ReadMessage error for container %s: %v", containerId, err)
+					logger.Infof("[monitor:ws:data] ReadMessage error for container %s: %v", containerId, err)
 				}
 			}
 			return
@@ -150,7 +150,7 @@ func (h *WebSocketDataChannelHandler) handleConnection(conn *websocket.Conn, con
 			}
 		} else {
 			// Data channel only accepts binary messages for new protocol
-			log.Printf("[monitor:ws:data] Unexpected message type on data channel: %d (expected BinaryMessage)", messageType)
+			logger.Infof("[monitor:ws:data] Unexpected message type on data channel: %d (expected BinaryMessage)", messageType)
 		}
 	}
 }
