@@ -7,10 +7,21 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-zoox/logger"
 )
+
+// authFailureLogLimiter limits auth failure logs per IP to reduce log spam from scanners
+var authFailureLogLimiter = struct {
+	mu      sync.Mutex
+	lastLog map[string]time.Time
+}{lastLog: make(map[string]time.Time)}
+
+const authFailureLogInterval = 60 * time.Second
 
 const (
 	// TUNNEL_TCP_FLAG is the TCP tunnel authentication flag
@@ -62,6 +73,26 @@ func NewDataChannelHandlerLegacy(ctx *types.Context, options *CreateTCPMonitorOp
 	return monitor, nil
 }
 
+// logAuthFailure logs auth failure with rate limiting per remote IP.
+// Always logs "invalid connection"; logger.Debugf shows details when LOG_LEVEL=debug.
+func logAuthFailure(remoteAddr string, err error) {
+	ip := remoteAddr
+	if idx := strings.LastIndex(remoteAddr, ":"); idx >= 0 {
+		ip = remoteAddr[:idx]
+	}
+	authFailureLogLimiter.mu.Lock()
+	last := authFailureLogLimiter.lastLog[ip]
+	now := time.Now()
+	if now.Sub(last) >= authFailureLogInterval {
+		authFailureLogLimiter.lastLog[ip] = now
+		authFailureLogLimiter.mu.Unlock()
+		log.Printf("[monitor:tcp] Authentication error from %s: invalid connection", ip)
+		logger.Debugf("[monitor:tcp] Authentication error from %s: %v", ip, err)
+	} else {
+		authFailureLogLimiter.mu.Unlock()
+	}
+}
+
 // acceptConnections accepts incoming TCP connections
 func (m *TCPMonitor) acceptConnections() {
 	for {
@@ -108,7 +139,7 @@ func (m *TCPMonitor) handleConnection(conn net.Conn) {
 		// Process authentication
 		data := buffer[:n]
 		if err := m.processAuthentication(conn, data, &requestID, &isAuthenticated, &authMu); err != nil {
-			log.Printf("[monitor:tcp] Authentication error: %v", err)
+			logAuthFailure(conn.RemoteAddr().String(), err)
 			return
 		}
 
@@ -140,7 +171,7 @@ func (m *TCPMonitor) processAuthentication(
 	// Check FLAG
 	flag := string(data[:len(TUNNEL_TCP_FLAG)])
 	if flag != TUNNEL_TCP_FLAG {
-		log.Printf("[monitor:tcp] unknown flag: %s, should be %s", flag, TUNNEL_TCP_FLAG)
+		logger.Debugf("[monitor:tcp] unknown flag: %s, should be %s", flag, TUNNEL_TCP_FLAG)
 		conn.Write([]byte(fmt.Sprintf("%s401 unauthorized", TUNNEL_TCP_FLAG)))
 		conn.Close()
 		return fmt.Errorf("invalid flag")
@@ -154,12 +185,12 @@ func (m *TCPMonitor) processAuthentication(
 	offset += REQUEST_ID_LENGTH
 	signature := string(data[offset : offset+SIGNATURE_LENGTH])
 
-	log.Printf("[monitor:tcp] id: %s, request_id: %s, sign: %s", containerID, requestIDValue, signature)
+	logger.Debugf("[monitor:tcp] id: %s, request_id: %s, sign: %s", containerID, requestIDValue, signature)
 
 	// Get token for container
 	container := m.ctx.Container.Get(containerID)
 	if container == nil {
-		log.Printf("[monitor:tcp] invalid client(id:%s): %s", containerID, signature)
+		logger.Debugf("[monitor:tcp] invalid client(id:%s): %s", containerID, signature)
 		conn.Write([]byte(fmt.Sprintf("%s404 invalid client", TUNNEL_TCP_FLAG)))
 		conn.Close()
 		return fmt.Errorf("container not found")
@@ -170,14 +201,14 @@ func (m *TCPMonitor) processAuthentication(
 		Type: types.TunnelTypeTCP,
 	})
 	if err != nil {
-		log.Printf("[monitor:tcp] invalid client(id:%s): %s: %v", containerID, signature, err)
+		logger.Debugf("[monitor:tcp] invalid client(id:%s): %s: %v", containerID, signature, err)
 		conn.Write([]byte(fmt.Sprintf("%s404 invalid client", TUNNEL_TCP_FLAG)))
 		conn.Close()
 		return fmt.Errorf("failed to get token: %v", err)
 	}
 
 	if tokenRes == nil || tokenRes.Token == "" {
-		log.Printf("[monitor:tcp] invalid client(id:%s): %s", containerID, signature)
+		logger.Debugf("[monitor:tcp] invalid client(id:%s): %s", containerID, signature)
 		conn.Write([]byte(fmt.Sprintf("%s403 invalid client", TUNNEL_TCP_FLAG)))
 		conn.Close()
 		return fmt.Errorf("invalid token")
@@ -186,7 +217,7 @@ func (m *TCPMonitor) processAuthentication(
 	// Verify signature: HMAC-SHA256(ContainerID, secret)
 	expectedSignature := hmacSHA256(containerID, tokenRes.Token)
 	if signature != expectedSignature {
-		log.Printf("[monitor:tcp] invalid signature(id:%s): %s, expected: %s", containerID, signature, expectedSignature)
+		logger.Debugf("[monitor:tcp] invalid signature(id:%s): %s, expected: %s", containerID, signature, expectedSignature)
 		conn.Write([]byte(fmt.Sprintf("%s402 invalid signature", TUNNEL_TCP_FLAG)))
 		conn.Close()
 		return fmt.Errorf("invalid signature")
