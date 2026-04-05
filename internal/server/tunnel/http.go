@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,6 +31,44 @@ type HTTPTunnel struct {
 }
 
 const requestResponseTimeout = 60 * time.Second
+
+// maxHTTPTunnelRequestBodyBytes caps how much of each HTTP request body is buffered for tunneling
+// (full buffering is required by the current wire format). Tests may lower this value temporarily.
+var maxHTTPTunnelRequestBodyBytes = int64(32 << 20)
+
+var errTunnelRequestBodyTooLarge = errors.New("tunnel: request body exceeds limit")
+
+func readTunnelRequestBody(body io.ReadCloser, max int64) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	defer body.Close()
+	limited := io.LimitReader(body, max+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, errTunnelRequestBodyTooLarge
+	}
+	return data, nil
+}
+
+// appendForwardedHTTPRequest writes the HTTP/1.x request line, Host (if any), other headers, CRLF, and body.
+// Incoming server-side requests store Host in req.Host; it is not included in req.Header.Write.
+func appendForwardedHTTPRequest(b *strings.Builder, req *http.Request, body []byte) {
+	b.WriteString(fmt.Sprintf("%s %s %s\r\n", req.Method, req.URL.RequestURI(), req.Proto))
+	if host := req.Host; host != "" {
+		b.WriteString("Host: ")
+		b.WriteString(host)
+		b.WriteString("\r\n")
+	}
+	req.Header.Write(b)
+	b.WriteString("\r\n")
+	if len(body) > 0 {
+		b.Write(body)
+	}
+}
 
 // CreateHTTPTunnel creates a new HTTP tunnel
 func CreateHTTPTunnel(ctx *types.Context, domain string) *HTTPTunnel {
@@ -95,27 +134,17 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 		// net/http has already parsed the first request. Read the body before Hijack (required),
 		// then rebuild the raw request for the tunnel. A new ReadRequest on the bare conn would
 		// block forever waiting for a second request on keep-alive connections.
-		var bodyData []byte
-		if r.Body != nil {
-			var err error
-			bodyData, err = io.ReadAll(r.Body)
-			_ = r.Body.Close()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+		bodyData, err := readTunnelRequestBody(r.Body, maxHTTPTunnelRequestBodyBytes)
+		if err != nil {
+			if errors.Is(err, errTunnelRequestBodyTooLarge) {
+				http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
 				return
 			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		var firstReq strings.Builder
-		firstReq.WriteString(fmt.Sprintf("%s %s %s\r\n", r.Method, r.URL.RequestURI(), r.Proto))
-		// Incoming requests store Host in r.Host; it is not included in r.Header.Write (promoted field).
-		if host := r.Host; host != "" {
-			firstReq.WriteString("Host: ")
-			firstReq.WriteString(host)
-			firstReq.WriteString("\r\n")
-		}
-		r.Header.Write(&firstReq)
-		firstReq.WriteString("\r\n")
-		firstReq.Write(bodyData)
+		appendForwardedHTTPRequest(&firstReq, r, bodyData)
 		firstData := firstReq.String()
 
 		conn, rw, err := hijacker.Hijack()
@@ -186,22 +215,18 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn, br *bufio.Reader, firstR
 		}
 
 		var bodyData []byte
-		if req.Body != nil {
-			bodyData, err = io.ReadAll(req.Body)
-			_ = req.Body.Close()
-			if err != nil {
+		bodyData, err = readTunnelRequestBody(req.Body, maxHTTPTunnelRequestBodyBytes)
+		if err != nil {
+			if errors.Is(err, errTunnelRequestBodyTooLarge) {
+				writeRequestEntityTooLarge(tcpConn)
+			} else {
 				logger.Infof("[tunnel:http] Error reading request body: %v", err)
-				return
 			}
+			return
 		}
 
 		var requestData strings.Builder
-		requestData.WriteString(fmt.Sprintf("%s %s %s\r\n", req.Method, req.URL.RequestURI(), req.Proto))
-		req.Header.Write(&requestData)
-		requestData.WriteString("\r\n")
-		if len(bodyData) > 0 {
-			requestData.Write(bodyData)
-		}
+		appendForwardedHTTPRequest(&requestData, req, bodyData)
 
 		if !processOne(req, requestData.String()) {
 			return
@@ -410,20 +435,6 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	return nil
 }
 
-// extractHostFromRawRequest extracts Host header from raw HTTP request
-func extractHostFromRawRequest(data string) string {
-	lines := strings.Split(data, "\r\n")
-	for _, line := range lines {
-		if strings.HasPrefix(strings.ToLower(line), "host:") {
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	return ""
-}
-
 // destroyConnection sends 404 response and closes connection
 func destroyConnection(tcpConn net.Conn) {
 	response := []string{
@@ -439,6 +450,21 @@ func destroyConnection(tcpConn net.Conn) {
 	responseStr := strings.Join(response, "\r\n")
 	tcpConn.Write([]byte(responseStr))
 	tcpConn.Close()
+}
+
+func writeRequestEntityTooLarge(tcpConn net.Conn) {
+	const msg = "Request Entity Too Large"
+	response := []string{
+		"HTTP/1.1 413 Request Entity Too Large",
+		"Content-Type: text/plain; charset=utf-8",
+		fmt.Sprintf("Content-Length: %d", len(msg)),
+		fmt.Sprintf("Date: %s", time.Now().UTC().Format(http.TimeFormat)),
+		"Connection: close",
+		"",
+		msg,
+	}
+	_, _ = tcpConn.Write([]byte(strings.Join(response, "\r\n")))
+	_ = tcpConn.Close()
 }
 
 func buildGatewayTimeoutResponse() string {

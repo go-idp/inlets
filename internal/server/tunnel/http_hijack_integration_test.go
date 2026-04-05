@@ -181,6 +181,93 @@ func TestHTTPTunnelHijackFirstRequestDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestHTTPTunnelRequestBodyTooLargeBeforeHijack(t *testing.T) {
+	old := maxHTTPTunnelRequestBodyBytes
+	maxHTTPTunnelRequestBodyBytes = 64
+	defer func() { maxHTTPTunnelRequestBodyBytes = old }()
+
+	ctx := testTunnelContext()
+	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	defer cleanup()
+	host := strings.TrimPrefix(baseURL, "http://")
+
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	payload := strings.Repeat("x", 100)
+	fmt.Fprintf(conn, "POST /big HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		len(payload), payload)
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestHTTPTunnelKeepAliveRequestBodyTooLarge(t *testing.T) {
+	old := maxHTTPTunnelRequestBodyBytes
+	maxHTTPTunnelRequestBodyBytes = 32
+	defer func() { maxHTTPTunnelRequestBodyBytes = old }()
+
+	adapter := &fakeHTTPTunnelAdapter{
+		responses: []string{
+			"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n",
+		},
+	}
+	ctx := testTunnelContext()
+	adapter.callbacks = ctx.CallbackContainer
+	registerAppExampleMapping(t, ctx, adapter)
+
+	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	defer cleanup()
+	host := strings.TrimPrefix(baseURL, "http://")
+
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	fmt.Fprintf(conn, "GET /one HTTP/1.1\r\nHost: app.example.com\r\nConnection: keep-alive\r\n\r\n")
+	br := bufio.NewReader(conn)
+	resp1, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("first response: %v", err)
+	}
+	_, _ = io.ReadAll(resp1.Body)
+	_ = resp1.Body.Close()
+	if resp1.StatusCode != 200 {
+		t.Fatalf("first status %d", resp1.StatusCode)
+	}
+
+	payload := strings.Repeat("y", 64)
+	fmt.Fprintf(conn, "POST /two HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		len(payload), payload)
+	resp2, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("second response: %v", err)
+	}
+	_, _ = io.ReadAll(resp2.Body)
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("second status %d, want %d", resp2.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+	reqs := adapter.captured()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 tunneled request, got %d", len(reqs))
+	}
+}
+
 // TestHTTPTunnelHijackKeepAliveSecondRequest ensures the Hijack bufio.Reader is used for the
 // second HTTP request on the same TCP connection.
 func TestHTTPTunnelHijackKeepAliveSecondRequest(t *testing.T) {
@@ -235,8 +322,14 @@ func TestHTTPTunnelHijackKeepAliveSecondRequest(t *testing.T) {
 	if !strings.Contains(string(reqs[0]), "GET /one ") {
 		t.Fatalf("first tunneled: %q", reqs[0])
 	}
+	if !strings.Contains(string(reqs[0]), "Host: app.example.com") {
+		t.Fatalf("first tunneled raw missing Host: %q", reqs[0])
+	}
 	if !strings.Contains(string(reqs[1]), "GET /two ") {
 		t.Fatalf("second tunneled: %q", reqs[1])
+	}
+	if !strings.Contains(string(reqs[1]), "Host: app.example.com") {
+		t.Fatalf("second tunneled raw missing Host: %q", reqs[1])
 	}
 }
 
