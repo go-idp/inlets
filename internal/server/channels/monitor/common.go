@@ -24,6 +24,9 @@ type CreateWebSocketOptions struct {
 // WebSocketConnection represents a WebSocket connection with metadata
 type WebSocketConnection struct {
 	*websocket.Conn
+	// RequestHost is the HTTP Host from the WebSocket upgrade (host only, no port). Used to build
+	// authenticate response URL when server Domain option is empty.
+	RequestHost    string
 	ContainerID    string
 	ClientID       string
 	Capabilities   *client.Capabilities

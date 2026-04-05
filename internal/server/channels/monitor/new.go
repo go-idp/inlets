@@ -24,7 +24,8 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 	logger.Infof("[monitor:ws] New WebSocket connection from %s", conn.RemoteAddr())
 
 	wsConn := &WebSocketConnection{
-		Conn: conn,
+		Conn:        conn,
+		RequestHost: hostOnly(r.Host),
 	}
 
 	// Send 'id' message to client

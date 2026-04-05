@@ -3,8 +3,10 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -50,6 +52,10 @@ type Client struct {
 	// Heartbeat state
 	heartbeatMu     sync.Mutex
 	heartbeatActive bool // true if heartbeat is active
+
+	// separatedChannels is true when using /_/monitor (and data channel); false for legacy /_client
+	// or after HTTP 404 on /_/monitor forces legacy. Reconnect reuses this choice.
+	separatedChannels bool
 }
 
 // New constructs a Client with sane defaults.
@@ -93,24 +99,19 @@ func (c *Client) Run() error {
 		protocol = "wss"
 	}
 
-	// Check if we should use new protocol (version 2.0.0+)
-	useNewProtocol := compareVersion(c.opts.Version, "2.0.0") >= 0
-
-	var monitorPath string
-	if useNewProtocol {
-		// New protocol: use separated channels
-		monitorPath = wsMonitorPath
-		c.logger.Printf("Using new protocol with separated channels")
-	} else {
-		// Legacy protocol: use single connection
-		monitorPath = wsPath
-		c.logger.Printf("Using legacy protocol with single connection")
-	}
-
-	// Connect to monitor channel (for ping/pong, auth, control)
-	monitorURL := fmt.Sprintf("%s://%s%s", protocol, c.opts.Remote, monitorPath)
-	if err := c.connectMonitorChannel(monitorURL); err != nil {
+	clientWantsV2 := compareVersion(c.opts.Version, "2.0.0") >= 0
+	useNewProtocol, err := c.establishMonitor(protocol, c.opts.Remote, clientWantsV2)
+	if err != nil {
 		return fmt.Errorf("failed to connect monitor channel: %v", err)
+	}
+	c.separatedChannels = useNewProtocol
+
+	if useNewProtocol {
+		c.logger.Printf("Using new protocol with separated channels")
+	} else if clientWantsV2 {
+		c.logger.Printf("Using v1 legacy protocol: server is not v2 or does not expose %s (single WebSocket %s)", wsMonitorPath, wsPath)
+	} else {
+		c.logger.Printf("Using legacy protocol with single connection")
 	}
 
 	// Stop any existing heartbeat before starting new one
@@ -142,6 +143,106 @@ func (c *Client) Run() error {
 	select {}
 }
 
+// readDialErrorBodySnippet reads a short prefix of the response body for logs, then closes the body.
+func readDialErrorBodySnippet(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	_ = resp.Body.Close()
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	s := strings.TrimSpace(string(b))
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) > 180 {
+		return s[:180] + "..."
+	}
+	return s
+}
+
+// monitorDialFailureSummary builds a clear, user-facing explanation for a failed monitor WebSocket dial.
+func monitorDialFailureSummary(wsURL string, err error, resp *http.Response, bodySnippet string) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("target=%s", wsURL))
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("error=%v", err))
+	}
+	if resp != nil {
+		parts = append(parts, fmt.Sprintf("http=%s", resp.Status))
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			parts = append(parts, "hint=HTTP 404: wrong path or server is pre-v2 (no "+wsMonitorPath+"). Check -remote points at the inlets server.")
+		case http.StatusUnauthorized, http.StatusForbidden:
+			parts = append(parts, "hint=HTTP 401/403: request rejected before WebSocket upgrade (check proxy auth, IP allowlists, or server access rules).")
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			parts = append(parts, "hint=5xx from server or proxy while upgrading; check reverse proxy WebSocket settings and inlets server health.")
+		case http.StatusMethodNotAllowed, http.StatusNotImplemented:
+			parts = append(parts, "hint=Method/status suggests the URL is not a WebSocket endpoint (wrong path or plain HTTP handler).")
+		default:
+			if resp.StatusCode >= 400 {
+				parts = append(parts, "hint=Non-success HTTP status during WebSocket handshake; see server or proxy logs for this path.")
+			}
+		}
+	} else {
+		parts = append(parts, "hint=no HTTP response (wrong host/port, TLS mismatch ws/wss, firewall, or dial timeout).")
+	}
+	if bodySnippet != "" {
+		parts = append(parts, fmt.Sprintf("body=%q", bodySnippet))
+	}
+	return strings.Join(parts, " | ")
+}
+
+// establishMonitor connects the monitor WebSocket. For client v2+ it tries /_/monitor first; on HTTP 404
+// it immediately falls back to legacy /_client (older servers). Other errors retry on the v2 path only.
+func (c *Client) establishMonitor(protocol, remoteHostPort string, clientWantsV2 bool) (useSeparated bool, err error) {
+	legacyURL := fmt.Sprintf("%s://%s%s", protocol, remoteHostPort, wsPath)
+	if !clientWantsV2 {
+		return false, c.connectMonitorChannel(legacyURL)
+	}
+
+	newURL := fmt.Sprintf("%s://%s%s", protocol, remoteHostPort, wsMonitorPath)
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+
+	maxRetries := 1024
+	var lastSummary string
+	for i := 0; i < maxRetries; i++ {
+		c.logger.Printf("Connecting to monitor channel ... (attempt %d/%d)", i+1, maxRetries)
+		conn, resp, err := dialer.Dial(newURL, nil)
+		if err == nil {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			c.monitorConn = conn
+			c.logger.Printf("Monitor channel connected successfully")
+			return true, nil
+		}
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
+			c.logger.Printf("Server does not appear to be v2 (HTTP 404 on %s); switching to v1 legacy protocol (%s)", wsMonitorPath, wsPath)
+			return false, c.connectMonitorChannel(legacyURL)
+		}
+
+		bodySnippet := ""
+		if resp != nil {
+			bodySnippet = readDialErrorBodySnippet(resp)
+		}
+		lastSummary = monitorDialFailureSummary(newURL, err, resp, bodySnippet)
+
+		if i < maxRetries-1 {
+			waitTime := time.Duration(i+1) * 2 * time.Second
+			c.logger.Printf("Monitor connection failed, retrying in %v: %s", waitTime, lastSummary)
+			time.Sleep(waitTime)
+		} else {
+			c.logger.Printf("Monitor connection failed (no more retries): %s", lastSummary)
+		}
+	}
+
+	return false, fmt.Errorf("failed to connect monitor channel after %d attempts: %s", maxRetries, lastSummary)
+}
+
 // connectMonitorChannel connects to the monitor WebSocket channel
 func (c *Client) connectMonitorChannel(wsURL string) error {
 	u, err := url.Parse(wsURL)
@@ -150,28 +251,39 @@ func (c *Client) connectMonitorChannel(wsURL string) error {
 	}
 
 	maxRetries := 1024
-	var connErr error
+	var lastSummary string
 	for i := 0; i < maxRetries; i++ {
 		c.logger.Printf("Connecting to monitor channel ... (attempt %d/%d)", i+1, maxRetries)
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
 		}
 
-		conn, _, connErr := dialer.Dial(u.String(), nil)
-		if connErr == nil {
+		conn, resp, err := dialer.Dial(u.String(), nil)
+		if err == nil {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
 			c.monitorConn = conn
 			c.logger.Printf("Monitor channel connected successfully")
 			return nil
 		}
 
+		bodySnippet := ""
+		if resp != nil {
+			bodySnippet = readDialErrorBodySnippet(resp)
+		}
+		lastSummary = monitorDialFailureSummary(u.String(), err, resp, bodySnippet)
+
 		if i < maxRetries-1 {
 			waitTime := time.Duration(i+1) * 2 * time.Second
-			c.logger.Printf("Monitor connection failed, retrying in %v...", waitTime)
+			c.logger.Printf("Monitor connection failed, retrying in %v: %s", waitTime, lastSummary)
 			time.Sleep(waitTime)
+		} else {
+			c.logger.Printf("Monitor connection failed (no more retries): %s", lastSummary)
 		}
 	}
 
-	return fmt.Errorf("failed to connect monitor channel after %d attempts: %v", maxRetries, connErr)
+	return fmt.Errorf("failed to connect monitor channel after %d attempts: %s", maxRetries, lastSummary)
 }
 
 // connectDataChannel connects to the data WebSocket channel for a specific stream
@@ -198,8 +310,12 @@ func (c *Client) connectDataChannel(streamID, wsURL string) (*websocket.Conn, er
 			HandshakeTimeout: 10 * time.Second,
 		}
 
-		conn, _, connErr := dialer.Dial(u.String(), nil)
-		if connErr == nil {
+		conn, resp, err := dialer.Dial(u.String(), nil)
+		if err != nil && resp != nil {
+			_ = resp.Body.Close()
+		}
+		connErr = err
+		if err == nil {
 			c.dataConnMu.Lock()
 			c.dataConns[streamID] = conn
 			c.dataWriteMu[streamID] = &sync.Mutex{}
@@ -210,7 +326,11 @@ func (c *Client) connectDataChannel(streamID, wsURL string) (*websocket.Conn, er
 
 		if i < maxRetries-1 {
 			waitTime := time.Duration(i+1) * 2 * time.Second
-			c.logger.Printf("Data connection failed for stream %s, retrying in %v...", streamID, waitTime)
+			if resp != nil {
+				c.logger.Printf("Data connection failed for stream %s: %v (HTTP %s), retrying in %v...", streamID, err, resp.Status, waitTime)
+			} else {
+				c.logger.Printf("Data connection failed for stream %s: %v, retrying in %v...", streamID, err, waitTime)
+			}
 			time.Sleep(waitTime)
 		}
 	}
@@ -234,8 +354,11 @@ func (c *Client) authenticate() error {
 	// Generate signature
 	signature := hmacSHA512(strconv.FormatInt(timestamp, 10), signedSecret)
 
-	// Get client capabilities based on version
+	// Get client capabilities based on version; use legacy auth when connected via /_client even if binary is v2+
 	capabilities := GetClientCapabilities(c.opts.Version)
+	if compareVersion(c.opts.Version, "2.0.0") >= 0 && !c.separatedChannels {
+		capabilities = nil
+	}
 
 	auth := Authentication{
 		Version:      c.opts.Version,
@@ -257,6 +380,8 @@ func (c *Client) authenticate() error {
 
 	if capabilities != nil {
 		c.logger.Printf("Authenticating with capabilities (version: %s)...", c.opts.Version)
+	} else if compareVersion(c.opts.Version, "2.0.0") >= 0 {
+		c.logger.Printf("Authenticating with v1 legacy protocol (client binary %s, non-v2 server)...", c.opts.Version)
 	} else {
 		c.logger.Printf("Authenticating with legacy protocol (version: %s)...", c.opts.Version)
 	}
@@ -522,19 +647,13 @@ func (c *Client) reconnect() error {
 		protocol = "wss"
 	}
 
-	// Check if we should use new protocol (version 2.0.0+)
-	useNewProtocol := compareVersion(c.opts.Version, "2.0.0") >= 0
-
-	var monitorPath string
+	useNewProtocol := c.separatedChannels
+	monitorPath := wsPath
 	if useNewProtocol {
-		// New protocol: use separated channels
 		monitorPath = wsMonitorPath
-	} else {
-		// Legacy protocol: use single connection
-		monitorPath = wsPath
 	}
 
-	// Reconnect monitor channel
+	// Reconnect monitor channel (same mode as before disconnect)
 	monitorURL := fmt.Sprintf("%s://%s%s", protocol, c.opts.Remote, monitorPath)
 	if err := c.connectMonitorChannel(monitorURL); err != nil {
 		return fmt.Errorf("failed to reconnect monitor channel: %v", err)

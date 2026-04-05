@@ -207,7 +207,7 @@ func handleAuthenticate(
 	}
 
 	// Send authentication success response
-	url := getServerUrlBySubDomain(*subDomain, options)
+	url := getServerUrlBySubDomain(*subDomain, options, wsConn.RequestHost)
 	sendAuthResponse(wsConn, options, true, "", url, config)
 
 	logger.Infof("[monitor:ws][%s] authenticated successfully (container: %s)", clientId, containerId)

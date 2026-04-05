@@ -22,7 +22,8 @@ func (h *MonitorChannelHandler) HandleConnectionLegacy(w http.ResponseWriter, r 
 	logger.Infof("[monitor:ws:legacy] New WebSocket connection from %s", conn.RemoteAddr())
 
 	wsConn := &WebSocketConnection{
-		Conn: conn,
+		Conn:        conn,
+		RequestHost: hostOnly(r.Host),
 	}
 
 	// Send 'id' message to client (required by @znode/websocket library)

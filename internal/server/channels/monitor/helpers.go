@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/go-idp/inlets/internal/client"
@@ -96,17 +97,42 @@ func sendAuthResponse(wsConn *WebSocketConnection, options *CreateWebSocketOptio
 	}
 }
 
-// getServerUrlBySubDomain gets server URL by subdomain
-func getServerUrlBySubDomain(subDomain string, options *CreateWebSocketOptions) string {
+// hostOnly returns the host part of a Host header value (strips bracketed IPv6 and port).
+func hostOnly(hostport string) string {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
+}
+
+// getServerUrlBySubDomain gets the public tunnel URL for a subdomain.
+// If options.Domain is empty, requestHost (from the WebSocket :authority / Host) is used so clients
+// still get a usable URL when the server forgot to set -domain (otherwise https://sub. with no suffix).
+func getServerUrlBySubDomain(subDomain string, options *CreateWebSocketOptions, requestHost string) string {
 	if subDomain == "" {
 		return ""
 	}
 
-	if options.Secure {
-		return fmt.Sprintf("https://%s.%s", subDomain, options.Domain)
+	domain := strings.TrimSpace(options.Domain)
+	if domain == "" {
+		domain = strings.TrimSpace(requestHost)
+		if domain != "" {
+			logger.Infof("[monitor:ws] server domain not configured; using Host %q for public tunnel URL (set server domain if it differs from the WebSocket host)", domain)
+		}
+	}
+	if domain == "" {
+		return ""
 	}
 
-	return fmt.Sprintf("http://%s.%s:%d", subDomain, options.Domain, options.Port)
+	if options.Secure {
+		return fmt.Sprintf("https://%s.%s", subDomain, domain)
+	}
+
+	return fmt.Sprintf("http://%s.%s:%d", subDomain, domain, options.Port)
 }
 
 // negotiateCapabilities negotiates capabilities between client and server
