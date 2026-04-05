@@ -157,6 +157,7 @@ const (
 // BinaryProtocolAdapter implements the binary protocol adapter
 type BinaryProtocolAdapter struct {
 	conn                *websocket.Conn
+	connWriteMu         *sync.Mutex // monitor conn write serialization (server)
 	dataConn            *websocket.Conn         // Optional data channel connection (legacy/shared)
 	dataWriteMu         *sync.Mutex             // Mutex for shared data channel writes
 	dataChannels        map[string]*dataChannel // Per-stream data channel connections
@@ -228,6 +229,19 @@ func NewBinaryProtocolAdapter(conn *websocket.Conn, capabilities *client.Capabil
 	// Don't start event listeners here - let WebSocketMonitor handle message reading
 	// adapter.setupEventListeners()
 	return adapter
+}
+
+// SetConnWriteMu sets the mutex used to serialize writes on the monitor connection.
+func (a *BinaryProtocolAdapter) SetConnWriteMu(mu *sync.Mutex) {
+	a.connWriteMu = mu
+}
+
+func (a *BinaryProtocolAdapter) writeMonitorText(msg []byte) error {
+	if a.connWriteMu != nil {
+		a.connWriteMu.Lock()
+		defer a.connWriteMu.Unlock()
+	}
+	return a.conn.WriteMessage(websocket.TextMessage, msg)
 }
 
 // getNextSequence gets the next sequence number for a stream
@@ -679,7 +693,7 @@ func (a *BinaryProtocolAdapter) sendDirect(msgType MessageType, streamId string,
 		return err
 	}
 
-	return a.conn.WriteMessage(websocket.TextMessage, msgBytes)
+	return a.writeMonitorText(msgBytes)
 }
 
 // sendMessageViaDataChannel sends a message via data channel (for new protocol)
@@ -933,7 +947,7 @@ func (a *BinaryProtocolAdapter) sendStreaming(msgType MessageType, streamId stri
 			return err
 		}
 
-		if err := a.conn.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
+		if err := a.writeMonitorText(msgBytes); err != nil {
 			return err
 		}
 

@@ -480,7 +480,7 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 			// Data channel will be created on-demand when server requests it
 		case "request":
 			if err := c.handleHTTPRequest(payload); err != nil {
-				c.logger.Printf("Error handling HTTP request: %v", err)
+				c.logger.Printf("[tunnel:http] handle request message failed: %v", err)
 			}
 		case "tcp:ready":
 			if err := c.handleTCPReady(payload); err != nil {

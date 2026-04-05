@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,14 +26,15 @@ const (
 )
 
 var (
-	serverPort           int
-	serverTCPPort        int
-	serverDomain         string
-	serverToken          string
-	serverSecure         bool
-	notificationProvider string
-	notificationURL      string
-	configPath           string
+	serverPort             int
+	serverTCPPort          int
+	serverDomain           string
+	serverToken            string
+	serverSecure           bool
+	serverSecureFromCLI    bool
+	notificationProvider   string
+	notificationURL        string
+	configPath             string
 )
 
 // ServerConfig represents the server configuration from YAML file
@@ -81,11 +83,6 @@ func main() {
 
 	defaultDomain := os.Getenv("DOMAIN")
 	defaultToken := os.Getenv("TOKEN")
-	// Default secure is true (matching Node.js version)
-	defaultSecure := true
-	if secureStr := os.Getenv("SECURE"); secureStr != "" {
-		defaultSecure = secureStr == "true" || secureStr == "1" || secureStr == "yes"
-	}
 
 	// Notification options
 	defaultNotificationProvider := os.Getenv("NOTIFICATION_PROVIDER")
@@ -128,6 +125,7 @@ func main() {
 				}
 			case "-s", "--secure":
 				serverSecure = true
+				serverSecureFromCLI = true
 			case "-c", "--config":
 				if i+1 < len(os.Args) {
 					configPath = os.Args[i+1]
@@ -198,12 +196,14 @@ func main() {
 			serverToken = defaultToken
 		}
 	}
-	// Secure defaults to true if not explicitly set
-	if !serverSecure {
-		if configFile != nil && configFile.Secure != nil {
+	// Priority: CLI -s/--secure > SECURE env > config file secure > default false
+	if !serverSecureFromCLI {
+		if sec := strings.TrimSpace(os.Getenv("SECURE")); sec != "" {
+			serverSecure = sec == "true" || sec == "1" || strings.EqualFold(sec, "yes")
+		} else if configFile != nil && configFile.Secure != nil {
 			serverSecure = *configFile.Secure
 		} else {
-			serverSecure = defaultSecure
+			serverSecure = false
 		}
 	}
 	if notificationProvider == "" {
@@ -363,8 +363,8 @@ func printHelp() {
     -d, --domain                         Domain for server                                      
     -p, --port <port>                    Port for server (default 8080)                         
                                          default: 8080                                          
-    -s, --secure                         Server with https, only for url                        
-                                         boolean, default: true                                 
+    -s, --secure                         Use https in public tunnel URLs                        
+                                         default: false (see config secure key or SECURE env)                                 
     --tcp-port <tcpPort>                 TCP Port for server (default 8443)                     
                                          default: 8443                                          
     -t, --token <token>                  Token for authentication                               

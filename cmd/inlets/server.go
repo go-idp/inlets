@@ -75,6 +75,12 @@ func Server() *cli.Command {
   
     ▸ inlets server  <OPTIONS...>`,
 		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "domain",
+				Aliases: []string{"d"},
+				Usage:   "Public tunnel domain (e.g. tunnel.example.com); used in client tunnel URLs and Host matching (env: DOMAIN)",
+				EnvVars: []string{"DOMAIN"},
+			},
 			&cli.IntFlag{
 				Name:    "port",
 				Aliases: []string{"p"},
@@ -85,9 +91,8 @@ func Server() *cli.Command {
 			&cli.BoolFlag{
 				Name:    "secure",
 				Aliases: []string{"s"},
-				Usage:   "Server with https, only for url (default: true)",
-				Value:   true,
-				EnvVars: []string{"SECURE"},
+				Usage:   "Use https in public tunnel URLs (default: false; override with config `secure` or SECURE env)",
+				Value:   false,
 			},
 			&cli.IntFlag{
 				Name:    "tcp-port",
@@ -160,13 +165,14 @@ func Server() *cli.Command {
 				}
 			}
 
-			serverSecure := c.Bool("secure")
-			if !serverSecure {
-				if configFile != nil && configFile.Secure != nil {
-					serverSecure = *configFile.Secure
-				} else {
-					serverSecure = true
-				}
+			// Priority: CLI --secure/-s > SECURE env > config file secure > default false
+			var serverSecure bool
+			if c.IsSet("secure") {
+				serverSecure = c.Bool("secure")
+			} else if sec := strings.TrimSpace(os.Getenv("SECURE")); sec != "" {
+				serverSecure = sec == "true" || sec == "1" || strings.EqualFold(sec, "yes")
+			} else if configFile != nil && configFile.Secure != nil {
+				serverSecure = *configFile.Secure
 			}
 
 			notificationProvider := c.String("notification-provider")
@@ -181,6 +187,16 @@ func Server() *cli.Command {
 				if configFile != nil && configFile.Notification != nil {
 					notificationURL = configFile.Notification.URL
 				}
+			}
+
+			serverDomain := strings.TrimSpace(c.String("domain"))
+			if serverDomain == "" {
+				if configFile != nil && strings.TrimSpace(configFile.Domain) != "" {
+					serverDomain = strings.TrimSpace(configFile.Domain)
+				}
+			}
+			if serverDomain == "" {
+				return fmt.Errorf("domain is required: set `domain` in the config file, or use --domain / -d, or set DOMAIN in the environment")
 			}
 
 			// Setup notification config
@@ -231,6 +247,7 @@ func Server() *cli.Command {
 			// Create server options
 			options := server.Options{
 				Version:         ServerVersion,
+				Domain:          serverDomain,
 				Port:            serverPort,
 				TCPPort:         serverTCPPort,
 				Secure:          serverSecure,

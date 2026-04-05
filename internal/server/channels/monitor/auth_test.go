@@ -24,8 +24,9 @@ func TestHandleResponseConsumesCallbackOnce(t *testing.T) {
 		got = data
 	})
 
+	// New protocol also uses the same TextMessage ["response", ...] path on the monitor channel.
 	wsConn := &WebSocketConnection{
-		UseNewProtocol: false,
+		UseNewProtocol: true,
 	}
 	payload := map[string]interface{}{
 		"id":   tcpID + ":" + requestID,

@@ -68,14 +68,20 @@ func CreateWebSocketMonitor(ctx *types.Context, options *monitorchannel.CreateWe
 
 // Attach attaches the WebSocket monitor to an HTTP server
 func (m *WebSocketMonitor) Attach(server *http.Server) {
+	mux := tunnel.ServeMuxFor(server)
+	if mux == nil {
+		logger.Infof("[server] WebSocket Attach: server.Handler is %T, not *http.ServeMux; WebSocket routes not registered", server.Handler)
+		return
+	}
+
 	// Legacy protocol: single connection at /_client (handles all messages)
-	http.HandleFunc(m.ctx.Config.WSPath, m.monitorHandler.HandleConnectionLegacy)
+	mux.HandleFunc(m.ctx.Config.WSPath, m.monitorHandler.HandleConnectionLegacy)
 
 	// New protocol: separated channels
 	// Monitor channel: ping/pong, auth, control messages
-	http.HandleFunc(m.ctx.Config.WSMonitorPath, m.monitorHandler.HandleConnection)
+	mux.HandleFunc(m.ctx.Config.WSMonitorPath, m.monitorHandler.HandleConnection)
 	// Data channel: tcp:data only
-	http.HandleFunc(m.ctx.Config.WSDataPath, m.dataHandler.HandleConnection)
+	mux.HandleFunc(m.ctx.Config.WSDataPath, m.dataHandler.HandleConnection)
 }
 
 // OnTunnel registers a handler for tunnel events

@@ -13,6 +13,7 @@ import (
 // Maintains compatibility with old clients
 type LegacyProtocolAdapter struct {
 	conn                *websocket.Conn
+	connWriteMu         *sync.Mutex // monitor conn write serialization (server)
 	isClient            bool
 	httpRequestHandler  func(id string, data []byte) error
 	httpResponseHandler func(id string, data []byte) error
@@ -32,6 +33,19 @@ func NewLegacyProtocolAdapter(conn *websocket.Conn, isClient bool) *LegacyProtoc
 	// Don't start event listeners here - let WebSocketMonitor handle message reading
 	// adapter.setupEventListeners()
 	return adapter
+}
+
+// SetConnWriteMu sets the mutex used to serialize writes on the monitor connection.
+func (a *LegacyProtocolAdapter) SetConnWriteMu(mu *sync.Mutex) {
+	a.connWriteMu = mu
+}
+
+func (a *LegacyProtocolAdapter) writeMonitorText(msg []byte) error {
+	if a.connWriteMu != nil {
+		a.connWriteMu.Lock()
+		defer a.connWriteMu.Unlock()
+	}
+	return a.conn.WriteMessage(websocket.TextMessage, msg)
 }
 
 // setupEventListeners sets up WebSocket event listeners
@@ -137,7 +151,7 @@ func (a *LegacyProtocolAdapter) SendHTTPRequest(id string, data []byte) error {
 		return err
 	}
 
-	return a.conn.WriteMessage(websocket.TextMessage, msgBytes)
+	return a.writeMonitorText(msgBytes)
 }
 
 // SendHTTPResponse sends an HTTP response
@@ -163,7 +177,7 @@ func (a *LegacyProtocolAdapter) SendHTTPResponse(id string, data []byte) error {
 		return err
 	}
 
-	return a.conn.WriteMessage(websocket.TextMessage, msgBytes)
+	return a.writeMonitorText(msgBytes)
 }
 
 // SendTCPData sends TCP data

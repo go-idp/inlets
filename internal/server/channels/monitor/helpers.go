@@ -324,3 +324,29 @@ func base64Decode(data string) (string, error) {
 	}
 	return string(decoded), nil
 }
+
+// parseHTTPResponsePayload extracts id and data from a client ["response", payload] message.
+func parseHTTPResponsePayload(payload interface{}) (id string, data string, ok bool) {
+	if m, ok := payload.(map[string]interface{}); ok {
+		idStr, _ := m["id"].(string)
+		dataStr, _ := m["data"].(string)
+		if idStr != "" && dataStr != "" {
+			return idStr, dataStr, true
+		}
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", false
+	}
+	var rd struct {
+		ID   string `json:"id"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(b, &rd); err != nil {
+		return "", "", false
+	}
+	if rd.ID != "" && rd.Data != "" {
+		return rd.ID, rd.Data, true
+	}
+	return "", "", false
+}

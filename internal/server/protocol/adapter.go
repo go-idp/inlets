@@ -1,5 +1,7 @@
 package protocol
 
+import "sync"
+
 // ProtocolAdapter interface for protocol adaptation
 // Used to unify message transmission handling across different protocol versions
 type ProtocolAdapter interface {
@@ -24,4 +26,7 @@ type ProtocolAdapter interface {
 
 	// Destroy cleans up resources
 	Destroy()
+
+	// SetConnWriteMu serializes WriteMessage on the monitor WebSocket when non-nil (server-side; required by gorilla/websocket).
+	SetConnWriteMu(mu *sync.Mutex)
 }

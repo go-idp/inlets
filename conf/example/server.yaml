@@ -12,8 +12,9 @@
 #
 # Or specify it with: inlets server -c /path/to/config.yaml
 
-# Server domain (required)
-domain: tunnel.example.com
+# Server domain (required). Browser Host must be <sub>.<domain> (port in Host is OK).
+# Local test without DNS: curl --resolve custom-domain.tunnel.example.work:28080:127.0.0.1 http://custom-domain.tunnel.example.work:28080/
+domain: tunnel.example.work
 
 # HTTP server port (default: 8080)
 port: 8080
@@ -21,8 +22,8 @@ port: 8080
 # TCP server port (default: 8443)
 tcpPort: 8443
 
-# Enable HTTPS for URLs (default: true)
-secure: true
+# Enable HTTPS for URLs (default: false)
+secure: false
 
 # Authentication token (optional if clients are configured)
 # This is used for token-based authentication

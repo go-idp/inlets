@@ -148,3 +148,54 @@ func watchConfigFile(...) {
    - [ ] 检查日志消息是否使用英文
    - [ ] 检查错误消息是否使用英文
    - [ ] 检查用户可见的字符串是否需要国际化处理
+
+## 2026-04-06: HTTP Tunnel — Hijack 后重复解析首条请求导致阻塞
+
+### 问题现象
+
+- 公网入口 `curl`（尤其关闭代理 `--noproxy '*'`）对隧道域名请求时 **长时间无响应、0 bytes**，像一直 pending。
+- 服务端 HTTP 隧道路径上 **看不到首请求的完整处理**（或行为异常），客户端/上游看似正常。
+
+### 根因
+
+`internal/server/tunnel/http.go` 在 `ServeMux` 的 handler 里对连接 **`Hijack()`** 后，在 goroutine 里用 **`bufio.NewReader(conn)` + `http.ReadRequest(reader)`** 去读“第一条”HTTP 请求。
+
+但 **`net/http.Server` 在调用你的 `Handler` 之前已经解析了当前这条请求**：请求行与头部（以及可能的部分 body 处理）已由 server 完成。此时 TCP 上 **下一段可读数据应是 keep-alive 下的第二条请求**，而不是第一条。对第一条连接再 `ReadRequest` 会 **一直阻塞等待下一条请求**，浏览器/curl 则表现为首包永远不回。
+
+### 错误做法（概念）
+
+```go
+// ❌ Hijack 后把整条连接当成“还未读过的第一个请求”
+conn, _, _ := hijacker.Hijack()
+go func() {
+    r, err := http.ReadRequest(bufio.NewReader(conn)) // 首条连接上这里会等“第二条”请求 → 挂死
+    // ...
+}()
+```
+
+### 正确做法
+
+1. **在 `Hijack` 之前**按 `net/http` 约定 **读完 `r.Body` 并 `Close`**（文档要求：Hijack 后不要再读 `r.Body`）。
+2. 用 **`r.Method`、`r.URL.RequestURI()`、`r.Proto`、**`r.Host`（须单独写出）**、**`r.Header` 与 body 字节** 拼回与原先一致的 **raw HTTP 报文**（`firstData`），供隧道转发。对 **服务端收到的请求**，`Host` 被提升到 **`r.Host`**，**不会**出现在 `r.Header` 里，仅调用 **`r.Header.Write`** 会导致 **首包缺少 `Host:`**，上游/日志会异常。
+3. **`Hijack()` 必须接收 `*bufio.ReadWriter`**：使用返回的 **`rw.Reader`** 作为后续 **`http.ReadRequest`** 的输入（若 `rw`/`rw.Reader` 为空再退回 `bufio.NewReader(conn)`），避免丢弃 server 已在缓冲区里的数据。
+4. **`handleConnection`**：对 **第一条** 使用 handler 传入的 **`r` + `firstData`** 调用既有 `processRequest`；**仅对同连接上后续 keep-alive 请求** 使用 **`http.ReadRequest(br)`** 循环。
+
+### 经验总结
+
+1. **`Hijack` 与 `net/http` 状态机**：一旦进入 `Handler`，当前 `*http.Request` 就是“已解析的这一条”；裸连接上不一定还能再用 `ReadRequest` 重读同一条。
+2. **缓冲区一致性**：`Hijack` 返回的 `bufio.Reader` 可能已有预读字节，必须用同一个 reader 继续读，不能假设 `conn` 起点是下一条请求的开头。
+3. **排查线索**：首请求卡住、工具显示 0 bytes、服务端缺少对应 access/隧道日志时，优先怀疑 **重复解析 / 错误的 ReadRequest 起点**。
+4. **代码审查检查清单**（HTTP 隧道 / 任意 Hijack 转发 raw HTTP 的场景）:
+   - [ ] Hijack 前是否已处理 `r.Body`（读尽并关闭）？
+   - [ ] 首条请求是否使用 handler 的 `r`（及自拼 raw），而不是在 hijacked conn 上再 `ReadRequest` 首包？
+   - [ ] 后续 keep-alive 是否使用 **`Hijack` 返回的 `bufio.Reader`** 做 `ReadRequest`？
+   - [ ] 首包 raw 是否显式包含 **`Host: ` + `r.Host`**（若非空）？
+
+### 回归测试
+
+- `internal/server/tunnel/http_hijack_integration_test.go`：`TestHTTPTunnelHijackFirstRequestDoesNotBlock`（首包不阻塞且含 Host）、`TestHTTPTunnelHijackKeepAliveSecondRequest`（同连接第二条）、`TestHTTPTunnelHijackPOSTBodyBeforeHijack`（Hijack 前 body 进入 `firstData`）。使用 **`fakeHTTPTunnelAdapter`** 模拟客户端通过 callback 回写 HTTP 响应，无需真实 WebSocket。
+
+### 相关文件
+
+- `internal/server/tunnel/http.go`：`Attach` 中 mux handler、`handleConnection`（`firstData` / `br` / 首包与循环）
+- `internal/server/tunnel/http_hijack_integration_test.go`：上述集成测试

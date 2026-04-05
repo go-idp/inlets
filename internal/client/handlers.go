@@ -18,6 +18,24 @@ import (
 
 const upstreamRequestTimeout = 60 * time.Second
 
+// tunnelHTTPRequestLine returns the first line of a raw HTTP/1.x message for logging.
+func tunnelHTTPRequestLine(raw string) string {
+	if raw == "" {
+		return "(empty)"
+	}
+	if i := strings.Index(raw, "\r\n"); i >= 0 {
+		return strings.TrimSpace(raw[:i])
+	}
+	if i := strings.Index(raw, "\n"); i >= 0 {
+		return strings.TrimSpace(raw[:i])
+	}
+	const max = 120
+	if len(raw) > max {
+		return raw[:max] + "..."
+	}
+	return raw
+}
+
 func (c *Client) handleAuthenticateResponse(payload interface{}) error {
 	dataBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -80,58 +98,74 @@ func (c *Client) handleHTTPRequest(payload interface{}) error {
 	}
 
 	var reqData RequestData
-	if err := json.Unmarshal(dataBytes, &reqData); err != nil {
+	if err = json.Unmarshal(dataBytes, &reqData); err != nil {
 		return err
 	}
 
-	// Decompress data (currently no-op, matching TypeScript implementation)
-	data, err := decompress(reqData.Data)
+	var raw []byte
+	if c.negotiatedCapabilities != nil {
+		raw, err = decodeNewProtocolHTTPRequestPayload(reqData.Data, c.negotiatedCapabilities)
+	} else {
+		raw, err = decodeLegacyHTTPRequestPayload(reqData.Data)
+	}
 	if err != nil {
+		c.logger.Printf("[tunnel:http] failed to decode tunneled request: %v", err)
+		if reqData.ID != "" {
+			c.sendTunneledHTTPErrorResponse(reqData.ID, http.StatusBadGateway, "invalid tunnel request encoding")
+		}
 		return err
 	}
 
-	// Forward HTTP request to upstream
-	go c.forwardHTTPRequest(reqData.ID, data)
+	go c.forwardHTTPRequest(reqData.ID, string(raw))
 
 	return nil
 }
 
 func (c *Client) forwardHTTPRequest(id string, data string) {
+	reqLine := tunnelHTTPRequestLine(data)
+	c.logger.Printf("[tunnel:http] request id=%s %s", id, reqLine)
+
 	upstreamAddr := joinHostPort(c.opts.UpstreamHost, c.opts.UpstreamPort)
 	conn, err := net.DialTimeout("tcp", upstreamAddr, 10*time.Second)
 	if err != nil {
-		c.logger.Printf("Failed to connect to upstream: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s upstream connect failed: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream unreachable: %v", err))
 		return
 	}
 	defer conn.Close()
 
 	if err := conn.SetDeadline(time.Now().Add(upstreamRequestTimeout)); err != nil {
-		c.logger.Printf("Failed to set upstream deadline: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s upstream deadline: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusInternalServerError, "upstream deadline error")
 		return
 	}
 
 	if _, err := conn.Write([]byte(data)); err != nil {
-		c.logger.Printf("Failed to write to upstream: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s upstream write failed: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream write failed: %v", err))
 		return
 	}
 
 	reader := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(reader, nil)
 	if err != nil {
-		c.logger.Printf("Failed to read upstream HTTP response: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s upstream read response failed: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream read failed: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 
 	var response bytes.Buffer
 	if err := resp.Write(&response); err != nil {
-		c.logger.Printf("Failed to serialize upstream HTTP response: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s serialize upstream response failed: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "failed to read upstream response")
 		return
 	}
 
 	compressed, err := compress(base64.StdEncoding.EncodeToString(response.Bytes()))
 	if err != nil {
-		c.logger.Printf("Failed to compress response: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s compress response failed: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusInternalServerError, "response encoding error")
 		return
 	}
 
@@ -141,7 +175,38 @@ func (c *Client) forwardHTTPRequest(id string, data string) {
 	}
 
 	if err := c.sendMonitorMessage("response", respData); err != nil {
-		c.logger.Printf("Failed to send response: %v", err)
+		c.logger.Printf("[tunnel:http] id=%s %s send response to server failed: %v", id, reqLine, err)
+		return
+	}
+	c.logger.Printf("[tunnel:http] id=%s %s -> %s", id, reqLine, resp.Status)
+}
+
+// sendTunneledHTTPErrorResponse returns a minimal HTTP/1.1 error to the browser when upstream fails.
+// Without this, the server tunnel waits until TCP timeout with no bytes (looks like "pending").
+func (c *Client) sendTunneledHTTPErrorResponse(id string, code int, msg string) {
+	if id == "" {
+		return
+	}
+	if msg == "" {
+		msg = http.StatusText(code)
+	}
+	if msg == "" {
+		msg = "Error"
+	}
+	reason := http.StatusText(code)
+	if reason == "" {
+		reason = "Error"
+	}
+	body := []byte(msg)
+	raw := fmt.Sprintf("HTTP/1.1 %d %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		code, reason, len(body), string(body))
+
+	compressed, err := compress(base64.StdEncoding.EncodeToString([]byte(raw)))
+	if err != nil {
+		return
+	}
+	if err := c.sendMonitorMessage("response", ResponseData{ID: id, Data: compressed}); err != nil {
+		c.logger.Printf("Failed to send tunnel error response: %v", err)
 	}
 }
 

@@ -119,6 +119,7 @@ func handleAuthenticate(
 
 	// Create protocol adapter
 	adapter := protocol.Create(wsConn.Conn, negotiatedCapabilities, false)
+	adapter.SetConnWriteMu(&wsConn.writeMu)
 	wsConn.mu.Lock()
 	wsConn.Adapter = adapter
 	wsConn.mu.Unlock()
@@ -257,43 +258,33 @@ func handleAuthenticate(
 
 // handleResponse handles HTTP response from client
 func handleResponse(ctx *types.Context, wsConn *WebSocketConnection, payload interface{}) {
-	wsConn.mu.RLock()
-	adapter := wsConn.Adapter
-	useNewProtocol := wsConn.UseNewProtocol
-	wsConn.mu.RUnlock()
-
-	if useNewProtocol && adapter != nil {
-		// New protocol: response is already handled in adapter
+	// Both legacy and new protocol clients send ["response", {id, data}] as TextMessage on the monitor channel.
+	// BinaryProtocolAdapter.setupEventListeners is not started on the server; skipping here left responses unhandled
+	// and HTTP tunnels stuck until timeout.
+	id, data, ok := parseHTTPResponsePayload(payload)
+	if !ok {
+		logger.Infof("[monitor:ws] handleResponse: missing id/data (payload type %T)", payload)
 		return
 	}
 
-	// Legacy protocol: handle response
-	responseBytes, err := json.Marshal(payload)
+	parts := strings.Split(id, ":")
+	if len(parts) < 2 {
+		logger.Infof("[monitor:ws] handleResponse: malformed id %q", id)
+		return
+	}
+	tcpId := parts[0]
+	requestId := strings.Join(parts[1:], ":")
+	callback := ctx.CallbackContainer.Take(tcpId, requestId)
+	if callback == nil {
+		logger.Infof("[monitor:ws] handleResponse: no pending tunnel request for id %q", id)
+		return
+	}
+	decoded, err := base64Decode(data)
 	if err != nil {
+		logger.Infof("[monitor:ws] handleResponse: base64 decode: %v", err)
 		return
 	}
-
-	var responseData struct {
-		ID   string `json:"id"`
-		Data string `json:"data"`
-	}
-	if err := json.Unmarshal(responseBytes, &responseData); err != nil {
-		return
-	}
-
-	parts := strings.Split(responseData.ID, ":")
-	if len(parts) >= 2 {
-		tcpId := parts[0]
-		requestId := strings.Join(parts[1:], ":")
-		callback := ctx.CallbackContainer.Take(tcpId, requestId)
-		if callback != nil {
-			// Decode base64 response
-			decoded, err := base64Decode(responseData.Data)
-			if err == nil {
-				callback(decoded)
-			}
-		}
-	}
+	callback(decoded)
 }
 
 // handleDisconnect handles client disconnect

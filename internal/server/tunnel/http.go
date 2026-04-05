@@ -33,6 +33,7 @@ const requestResponseTimeout = 60 * time.Second
 
 // CreateHTTPTunnel creates a new HTTP tunnel
 func CreateHTTPTunnel(ctx *types.Context, domain string) *HTTPTunnel {
+	domain = strings.TrimSpace(domain)
 	// Escape domain for regex
 	escapedDomain := regexp.QuoteMeta(domain)
 	subDomainRe := regexp.MustCompile(fmt.Sprintf(`([^.]+)\.%s`, escapedDomain))
@@ -44,8 +45,29 @@ func CreateHTTPTunnel(ctx *types.Context, domain string) *HTTPTunnel {
 	}
 }
 
-// Attach attaches the HTTP tunnel to an HTTP server
+// ServeMuxFor returns the *http.ServeMux that srv dispatches to, or nil if srv uses a non-ServeMux Handler.
+// When Handler is nil, net/http uses DefaultServeMux at serve time; we register there to match that behavior.
+func ServeMuxFor(srv *http.Server) *http.ServeMux {
+	if srv == nil {
+		return http.DefaultServeMux
+	}
+	if mux, ok := srv.Handler.(*http.ServeMux); ok && mux != nil {
+		return mux
+	}
+	if srv.Handler == nil {
+		return http.DefaultServeMux
+	}
+	return nil
+}
+
+// Attach registers the HTTP tunnel on the same *http.ServeMux as server (server.Handler must be that mux or nil).
 func (t *HTTPTunnel) Attach(server *http.Server) {
+	mux := ServeMuxFor(server)
+	if mux == nil {
+		logger.Infof("[tunnel:http] Attach: server.Handler is %T, not *http.ServeMux; HTTP tunnel not registered", server.Handler)
+		return
+	}
+
 	// DON'T use ConnState - it interferes with WebSocket upgrades
 	// Instead, use HTTP handlers to process requests
 	// The WebSocket handler (registered first) will handle WebSocket upgrades
@@ -54,7 +76,7 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 	// Add a catch-all handler that processes non-WebSocket requests
 	// IMPORTANT: This must be registered AFTER WebSocket handler
 	// WebSocket handler is registered in wsMonitor.Attach() which is called first
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Skip WebSocket path - it's handled by WebSocket monitor
 		if r.URL.Path == t.ctx.Config.WSPath {
 			// This shouldn't happen if WebSocket handler is registered correctly
@@ -70,19 +92,52 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 			return
 		}
 
-		conn, _, err := hijacker.Hijack()
+		// net/http has already parsed the first request. Read the body before Hijack (required),
+		// then rebuild the raw request for the tunnel. A new ReadRequest on the bare conn would
+		// block forever waiting for a second request on keep-alive connections.
+		var bodyData []byte
+		if r.Body != nil {
+			var err error
+			bodyData, err = io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		var firstReq strings.Builder
+		firstReq.WriteString(fmt.Sprintf("%s %s %s\r\n", r.Method, r.URL.RequestURI(), r.Proto))
+		// Incoming requests store Host in r.Host; it is not included in r.Header.Write (promoted field).
+		if host := r.Host; host != "" {
+			firstReq.WriteString("Host: ")
+			firstReq.WriteString(host)
+			firstReq.WriteString("\r\n")
+		}
+		r.Header.Write(&firstReq)
+		firstReq.WriteString("\r\n")
+		firstReq.Write(bodyData)
+		firstData := firstReq.String()
+
+		conn, rw, err := hijacker.Hijack()
 		if err != nil {
 			logger.Infof("[tunnel:http] Failed to hijack connection: %v", err)
 			return
 		}
 
-		// Handle the connection at TCP level
-		go t.handleConnection(conn)
+		var br *bufio.Reader
+		if rw != nil && rw.Reader != nil {
+			br = rw.Reader
+		} else {
+			br = bufio.NewReader(conn)
+		}
+
+		go t.handleConnection(conn, br, r, firstData)
 	})
 }
 
-// handleConnection handles a new TCP connection
-func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
+// handleConnection handles a hijacked TCP connection. firstReq/firstData are the request already
+// parsed by net/http; br must be the Hijack buffer reader (or a new reader) for subsequent keep-alive reads.
+func (t *HTTPTunnel) handleConnection(tcpConn net.Conn, br *bufio.Reader, firstReq *http.Request, firstData string) {
 	socketConfig := &socketConfig{
 		tcpID:     uuid.New().String(),
 		domain:    "",
@@ -106,21 +161,30 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 		}
 	}()
 
-	// Read data from connection
-	reader := bufio.NewReader(tcpConn)
+	processOne := func(req *http.Request, data string) bool {
+		if err := t.processRequest(tcpConn, socketConfig, data, req); err != nil {
+			logger.Infof("[tunnel:http] Error processing request: %v", err)
+		}
+		if req.Close {
+			return false
+		}
+		return true
+	}
 
-	// Handle multiple requests on the same connection (HTTP/1.1 keep-alive)
+	// First request was already consumed by net/http
+	if firstReq != nil {
+		if !processOne(firstReq, firstData) {
+			return
+		}
+	}
+
+	// Further requests on the same connection (HTTP/1.1 keep-alive)
 	for {
-		// Read HTTP request
-		req, err := http.ReadRequest(reader)
+		req, err := http.ReadRequest(br)
 		if err != nil {
-			// Connection closed or error reading request
 			return
 		}
 
-		// Read request body from req.Body.
-		// IMPORTANT: Do not read from the underlying buffered reader directly,
-		// otherwise keep-alive framing can be corrupted for subsequent requests.
 		var bodyData []byte
 		if req.Body != nil {
 			bodyData, err = io.ReadAll(req.Body)
@@ -131,7 +195,6 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			}
 		}
 
-		// Reconstruct the full HTTP request
 		var requestData strings.Builder
 		requestData.WriteString(fmt.Sprintf("%s %s %s\r\n", req.Method, req.URL.RequestURI(), req.Proto))
 		req.Header.Write(&requestData)
@@ -140,18 +203,7 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn) {
 			requestData.Write(bodyData)
 		}
 
-		// Process the request
-		data := requestData.String()
-		if err := t.processRequest(tcpConn, socketConfig, data, req); err != nil {
-			logger.Infof("[tunnel:http] Error processing request: %v", err)
-			// Don't return, continue to next request if keep-alive
-			if req.Close {
-				return
-			}
-		}
-
-		// Check if connection should be closed
-		if req.Close {
+		if !processOne(req, requestData.String()) {
 			return
 		}
 	}
@@ -180,7 +232,11 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 	// Parse HTTP request to extract Host header
 	if socketConfig.domain == "" {
-		socketConfig.domain = req.Host
+		host := req.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		socketConfig.domain = host
 		// Check if this is a WebSocket upgrade request
 		if req.URL.Path == t.ctx.Config.WSPath {
 			socketConfig.isWS = true
