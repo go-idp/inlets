@@ -11,7 +11,13 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-const binaryMessageTypeHTTPRequest uint8 = 0x01
+const (
+	binaryMessageTypeHTTPRequest      uint8 = 0x01
+	binaryMessageTypeHTTPRequestHead  uint8 = 0x07
+	binaryMessageTypeHTTPRequestBody  uint8 = 0x08
+	binaryMessageTypeHTTPResponseHead uint8 = 0x09
+	binaryMessageTypeHTTPResponseBody uint8 = 0x0a
+)
 
 // decodeLegacyHTTPRequestPayload reverses server LegacyProtocolAdapter.encodeRequestData:
 // base64(raw HTTP) -> gzip -> base64; this path does the inverse.
@@ -92,4 +98,21 @@ func decompressBrotliBytes(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// decompressTunnelSemanticHead decompresses a semantic HTTP head frame (server -> client).
+func decompressTunnelSemanticHead(data []byte, caps *Capabilities) ([]byte, error) {
+	if caps == nil || caps.Flags&CapabilityFlagCompression == 0 || len(data) == 0 {
+		return data, nil
+	}
+	alg := "brotli"
+	if caps.Features != nil && caps.Features.Compression != nil && caps.Features.Compression.Preferred != "" {
+		alg = strings.ToLower(caps.Features.Compression.Preferred)
+	}
+	switch alg {
+	case "gzip":
+		return decompressGzipBytes(data)
+	default:
+		return decompressBrotliBytes(data)
+	}
 }

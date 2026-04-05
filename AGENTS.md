@@ -199,3 +199,41 @@ go func() {
 
 - `internal/server/tunnel/http.go`：`Attach` 中 mux handler、`handleConnection`（`firstData` / `br` / 首包与循环）
 - `internal/server/tunnel/http_hijack_integration_test.go`：上述集成测试
+
+## 2026-04-06: HTTP 语义流式 body（CapabilityFlagHTTPBodyStream）
+
+### 背景
+
+- 整包隧道模型 `SendHTTPRequest(id, []byte)` 必须把 **完整 HTTP/1.1 报文** 放进内存；大 body 只能依赖 `maxHTTPTunnelRequestBodyBytes` 等上限缓解。
+- 现有 **`CapabilityFlagHTTPStreaming`** + `shouldUseStreaming` 仅表示：单条逻辑消息在 WebSocket 上 **分片传输**，收端 **`streamManager` 拼回整块 `[]byte`** 再调 `httpRequestHandler`，**不是**「边读浏览器连接边转发 body」的语义流式。
+
+### 做法
+
+1. **新能力位 `CapabilityFlagHTTPBodyStream`**（与 `HTTPStreaming` 分离）：仅在 **新协议且协商双方均声明** 时启用；legacy / 未协商仍走整包 + body 上限（`readTunnelRequestBody`）。
+2. **新二进制类型**（不走 stream 重组）：`0x07` HTTPRequestHead、`0x08` HTTPRequestBody、`0x09` HTTPResponseHead、`0x0a` HTTPResponseBody。`handleBinaryMessage` 对语义类型 **直接 `dispatchSemanticHTTPMessage`**，每帧单独回调；**Body 帧不压缩**，**Head 帧**可按协商做压缩/解压（与服务端 `DecompressBinaryPayloadForCapabilities`、客户端 `decompressTunnelSemanticHead` / `maybeCompressSemanticResponseHead` 对称）。
+3. **入口隧道**（`internal/server/tunnel/http.go`）：在 **非 chunked** 且 **`ContentLength >= 0`**（含无 body）时，首包 **只拼头、Hijack 后** 用 `io.LimitReader` + 固定 buffer 读 body 并 `SendHTTPRequestBody`；chunked / 未知长度 **回退** 整包路径。keep-alive 后续请求在同样条件下从 **`req.Body`** 流式读出并分块发送。
+4. **响应回写浏览器**：客户端用 `httputil.DumpResponse(resp, false)` 发 Head，再分块发 Body；monitor 上仍走 `["response",{id,data}]`，`handleResponse` 解析二进制后若为 `0x09/0x0a`，经 **`ctx.HTTPStreamDispatch`**（由 `HTTPTunnel.Attach` 注册）写入 hijacked `tcpConn`，**不要**对语义帧 `Take` 单次 callback；`CallbackContainer` 仍在超时等场景使用。
+5. **`ProtocolAdapter`**：补充 `SendHTTPRequestHead/Body`、`SendHTTPResponseHead/Body`、`NegotiatedFlags()`；Legacy 对语义 Send 返回 `ErrSemanticHTTPNotSupported`，`NegotiatedFlags` 为 0。
+
+### 经验总结
+
+1. **命名区分**：`HTTPStreaming` = 传输层分片重组；`HTTPBodyStream` = 应用层头/体分帧、边读边发。
+2. **Host 与 keep-alive**：重组 **仅头部** 时仍须显式写 `Host:`（`req.Host`），与首包整包路径一致。
+3. **`net.Pipe` 测试**：对管道 **`ReadAll` 会等到 EOF**；测固定长度写应用 **`io.ReadFull`**，否则易假死。
+4. **审查清单**（语义 HTTP 隧道）:
+   - [ ] 未协商 `HTTPBodyStream` 时是否仍只走 `0x01` 整包解码？
+   - [ ] chunked 请求是否回退整包 + 上限？
+   - [ ] 响应 Head 是否在 monitor 侧按协商解压后再 `Write` 到浏览器？
+   - [ ] 语义响应路径是否避免误用单次 `Take` 消费整段响应？
+
+### 回归测试
+
+- `TestHTTPTunnelDispatchSemanticClientResponse`、`TestHTTPTunnelSemanticStreamPOSTReassemblesHeadAndBody`（`http_hijack_integration_test.go`）；`streamRecordAdapter` 实现 `NegotiatedFlags` 与语义 Send 以模拟客户端能力。
+
+### 相关文件
+
+- `internal/server/protocol/binary.go`：消息类型、语义发送/分发
+- `internal/server/tunnel/http.go`：`processRequestStream`、`dispatchSemanticClientResponse`
+- `internal/server/channels/monitor/auth.go`：`handleResponse` 语义分支
+- `internal/client/handlers.go`：`handleHTTPRequest` 按类型分发、流式响应发送
+- `internal/client/types.go`、`internal/server/channels/monitor/helpers.go`：能力协商

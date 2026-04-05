@@ -56,6 +56,9 @@ type Client struct {
 	// separatedChannels is true when using /_/monitor (and data channel); false for legacy /_client
 	// or after HTTP 404 on /_/monitor forces legacy. Reconnect reuses this choice.
 	separatedChannels bool
+
+	httpStreamMu   sync.Mutex
+	httpStreamSess map[string]*httpStreamSession
 }
 
 // New constructs a Client with sane defaults.
@@ -78,6 +81,7 @@ func New(opts *Options) *Client {
 		dataConns:       make(map[string]*websocket.Conn),
 		dataWriteMu:     make(map[string]*sync.Mutex),
 		dataConnMu:      &sync.RWMutex{},
+		httpStreamSess:  make(map[string]*httpStreamSession),
 	}
 }
 

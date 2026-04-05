@@ -3,20 +3,32 @@ package client
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/gorilla/websocket"
 )
 
 const upstreamRequestTimeout = 60 * time.Second
+
+const messageFlagFIN = 0x01
+
+type httpStreamSession struct {
+	conn          net.Conn
+	contentLength int64
+}
 
 // tunnelHTTPRequestLine returns the first line of a raw HTTP/1.x message for logging.
 func tunnelHTTPRequestLine(raw string) string {
@@ -101,8 +113,45 @@ func (c *Client) handleHTTPRequest(payload interface{}) error {
 	if err = json.Unmarshal(dataBytes, &reqData); err != nil {
 		return err
 	}
+	if reqData.ID == "" {
+		return nil
+	}
 
+	rawOuter, err := base64.StdEncoding.DecodeString(reqData.Data)
+	if err != nil {
+		c.logger.Printf("[tunnel:http] outer base64: %v", err)
+		c.sendTunneledHTTPErrorResponse(reqData.ID, http.StatusBadGateway, "invalid tunnel request encoding")
+		return err
+	}
+
+	msg, err := parseBinaryMessage(rawOuter)
+	if err != nil {
+		c.logger.Printf("[tunnel:http] parse binary: %v", err)
+		c.sendTunneledHTTPErrorResponse(reqData.ID, http.StatusBadGateway, "invalid tunnel request encoding")
+		return err
+	}
+
+	useStream := c.negotiatedCapabilities != nil && c.negotiatedCapabilities.Flags&CapabilityFlagHTTPBodyStream != 0
+	if !useStream && msg.Type != binaryMessageTypeHTTPRequest {
+		c.logger.Printf("[tunnel:http] unexpected message type %d", msg.Type)
+		return fmt.Errorf("unexpected message type %d", msg.Type)
+	}
+
+	switch msg.Type {
+	case binaryMessageTypeHTTPRequest:
+		return c.dispatchFullHTTPRequest(reqData)
+	case binaryMessageTypeHTTPRequestHead:
+		return c.handleHTTPRequestStreamHead(reqData.ID, msg)
+	case binaryMessageTypeHTTPRequestBody:
+		return c.handleHTTPRequestStreamBody(reqData.ID, msg)
+	default:
+		return fmt.Errorf("unhandled tunnel message type %d", msg.Type)
+	}
+}
+
+func (c *Client) dispatchFullHTTPRequest(reqData RequestData) error {
 	var raw []byte
+	var err error
 	if c.negotiatedCapabilities != nil {
 		raw, err = decodeNewProtocolHTTPRequestPayload(reqData.Data, c.negotiatedCapabilities)
 	} else {
@@ -115,10 +164,221 @@ func (c *Client) handleHTTPRequest(payload interface{}) error {
 		}
 		return err
 	}
-
 	go c.forwardHTTPRequest(reqData.ID, string(raw))
-
 	return nil
+}
+
+func parseContentLengthFromHeaders(head []byte) int64 {
+	sc := bufio.NewScanner(bytes.NewReader(head))
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			break
+		}
+		const prefix = "Content-Length:"
+		if len(line) > len(prefix) && strings.EqualFold(line[:len(prefix)], prefix) {
+			var n int64
+			_, _ = fmt.Sscanf(strings.TrimSpace(line[len(prefix):]), "%d", &n)
+			return n
+		}
+	}
+	return -1
+}
+
+func (c *Client) handleHTTPRequestStreamHead(id string, msg BinaryMessage) error {
+	head, err := decompressTunnelSemanticHead(msg.Data, c.negotiatedCapabilities)
+	if err != nil {
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "invalid tunnel request encoding")
+		return err
+	}
+	fin := (msg.Flags & messageFlagFIN) != 0
+	reqLine := tunnelHTTPRequestLine(string(head))
+
+	c.httpStreamMu.Lock()
+	if _, exists := c.httpStreamSess[id]; exists {
+		c.httpStreamMu.Unlock()
+		return fmt.Errorf("duplicate HTTP stream for id %s", id)
+	}
+	c.httpStreamMu.Unlock()
+
+	upstreamAddr := joinHostPort(c.opts.UpstreamHost, c.opts.UpstreamPort)
+	conn, err := net.DialTimeout("tcp", upstreamAddr, 10*time.Second)
+	if err != nil {
+		c.logger.Printf("[tunnel:http] id=%s %s upstream connect failed: %v", id, reqLine, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream unreachable: %v", err))
+		return err
+	}
+	if err := conn.SetDeadline(time.Now().Add(upstreamRequestTimeout)); err != nil {
+		conn.Close()
+		c.sendTunneledHTTPErrorResponse(id, http.StatusInternalServerError, "upstream deadline error")
+		return err
+	}
+	if _, err := conn.Write(head); err != nil {
+		conn.Close()
+		c.logger.Printf("[tunnel:http] id=%s upstream write failed: %v", id, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream write failed: %v", err))
+		return err
+	}
+
+	if !fin {
+		cl := parseContentLengthFromHeaders(head)
+		c.httpStreamMu.Lock()
+		c.httpStreamSess[id] = &httpStreamSession{conn: conn, contentLength: cl}
+		c.httpStreamMu.Unlock()
+		return nil
+	}
+
+	go c.readUpstreamAndStreamHTTPResponse(id, conn, reqLine)
+	return nil
+}
+
+func (c *Client) handleHTTPRequestStreamBody(id string, msg BinaryMessage) error {
+	c.httpStreamMu.Lock()
+	sess, ok := c.httpStreamSess[id]
+	if ok {
+		delete(c.httpStreamSess, id)
+	}
+	c.httpStreamMu.Unlock()
+	if !ok || sess == nil {
+		c.logger.Printf("[tunnel:http] body chunk for unknown stream %s", id)
+		return fmt.Errorf("unknown stream %s", id)
+	}
+	fin := (msg.Flags & messageFlagFIN) != 0
+	if len(msg.Data) > 0 {
+		if _, err := sess.conn.Write(msg.Data); err != nil {
+			sess.conn.Close()
+			c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream write failed: %v", err))
+			return err
+		}
+	}
+	reqLine := tunnelHTTPRequestLine("(stream)")
+	if !fin {
+		c.httpStreamMu.Lock()
+		c.httpStreamSess[id] = sess
+		c.httpStreamMu.Unlock()
+		return nil
+	}
+	go c.readUpstreamAndStreamHTTPResponse(id, sess.conn, reqLine)
+	return nil
+}
+
+func (c *Client) maybeCompressSemanticResponseHead(payload []byte) ([]byte, error) {
+	if c.negotiatedCapabilities == nil || c.negotiatedCapabilities.Flags&CapabilityFlagCompression == 0 || len(payload) == 0 {
+		return payload, nil
+	}
+	alg := "brotli"
+	if c.negotiatedCapabilities.Features != nil && c.negotiatedCapabilities.Features.Compression != nil && c.negotiatedCapabilities.Features.Compression.Preferred != "" {
+		alg = strings.ToLower(c.negotiatedCapabilities.Features.Compression.Preferred)
+	}
+	switch alg {
+	case "gzip":
+		var buf bytes.Buffer
+		w := gzip.NewWriter(&buf)
+		if _, err := w.Write(payload); err != nil {
+			_ = w.Close()
+			return nil, err
+		}
+		if err := w.Close(); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	default:
+		var buf bytes.Buffer
+		w := brotli.NewWriter(&buf)
+		if _, err := w.Write(payload); err != nil {
+			_ = w.Close()
+			return nil, err
+		}
+		if err := w.Close(); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+}
+
+func (c *Client) sendSemanticHTTPResponse(msgType uint8, id string, payload []byte, fin bool) error {
+	out := payload
+	var err error
+	if msgType == binaryMessageTypeHTTPResponseHead {
+		out, err = c.maybeCompressSemanticResponseHead(payload)
+		if err != nil {
+			return err
+		}
+	}
+	c.sequenceCounterMu.Lock()
+	seq := c.sequenceCounter[id]
+	c.sequenceCounter[id] = seq + 1
+	c.sequenceCounterMu.Unlock()
+	flags := uint8(0)
+	if fin {
+		flags |= messageFlagFIN
+	}
+	bin := buildBinaryMessage(BinaryMessage{Type: msgType, StreamID: id, Sequence: seq, Flags: flags, Data: out})
+	b64 := base64.StdEncoding.EncodeToString(bin)
+	return c.sendMonitorMessage("response", ResponseData{ID: id, Data: b64})
+}
+
+func (c *Client) readUpstreamAndStreamHTTPResponse(id string, upstream net.Conn, reqLine string) {
+	defer upstream.Close()
+	c.logger.Printf("[tunnel:http] request id=%s %s (streaming response)", id, reqLine)
+
+	resp, err := http.ReadResponse(bufio.NewReader(upstream), nil)
+	if err != nil {
+		c.logger.Printf("[tunnel:http] id=%s upstream read response failed: %v", id, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream read failed: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	headBytes, err := httputil.DumpResponse(resp, false)
+	if err != nil {
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "failed to serialize upstream response")
+		return
+	}
+
+	respCL := resp.ContentLength
+	headFin := respCL == 0
+	if resp.TransferEncoding != nil && len(resp.TransferEncoding) > 0 {
+		headFin = false
+	}
+	if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseHead, id, headBytes, headFin); err != nil {
+		c.logger.Printf("[tunnel:http] id=%s send response head failed: %v", id, err)
+		return
+	}
+	if headFin {
+		c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
+		return
+	}
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			fin := errors.Is(rerr, io.EOF)
+			if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseBody, id, buf[:n], fin); err != nil {
+				c.logger.Printf("[tunnel:http] id=%s send response body failed: %v", id, err)
+				return
+			}
+			if fin {
+				c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
+				return
+			}
+		}
+		if rerr == io.EOF {
+			if n == 0 {
+				if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseBody, id, nil, true); err != nil {
+					c.logger.Printf("[tunnel:http] id=%s send final body failed: %v", id, err)
+					return
+				}
+			}
+			c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
+			return
+		}
+		if rerr != nil {
+			c.logger.Printf("[tunnel:http] id=%s read body: %v", id, rerr)
+			return
+		}
+	}
 }
 
 func (c *Client) forwardHTTPRequest(id string, data string) {

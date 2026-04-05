@@ -21,7 +21,8 @@ var serverCapabilities = &client.Capabilities{
 		client.CapabilityFlagHTTPBinary |
 		client.CapabilityFlagHTTPStreaming |
 		client.CapabilityFlagTCPOverWS |
-		client.CapabilityFlagTCPMultiplex,
+		client.CapabilityFlagTCPMultiplex |
+		client.CapabilityFlagHTTPBodyStream,
 	Version: "2.0.0",
 	Features: &client.CapabilityFeatures{
 		Compression: &client.CompressionFeatures{
@@ -267,6 +268,7 @@ func formatProtocolConfiguration(capabilities *client.Capabilities) string {
 		{client.CapabilityFlagHTTPStreaming, "HTTP_STREAMING"},
 		{client.CapabilityFlagTCPOverWS, "TCP_OVER_WS"},
 		{client.CapabilityFlagTCPMultiplex, "TCP_MULTIPLEX"},
+		{client.CapabilityFlagHTTPBodyStream, "HTTP_BODY_STREAM"},
 	}
 
 	enabled := []string{}

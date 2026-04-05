@@ -128,6 +128,9 @@ type Context struct {
 	Container         TunnelContainer
 	TrafficStats      TrafficStatsContainer
 	BandwidthLimiter  BandwidthLimiter
+	// HTTPStreamDispatch handles semantic HTTP response frames (MessageType 0x09/0x0a) from the client.
+	// msgType is the binary protocol message type byte. Returns true if the frame was consumed.
+	HTTPStreamDispatch func(tcpID, requestID string, msgType uint8, payload []byte, fin bool) bool
 }
 
 // DomainMappingContainer interface for domain mapping operations

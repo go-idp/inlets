@@ -19,13 +19,17 @@ import (
 type MessageType uint8
 
 const (
-	MessageTypeControl      MessageType = 0x00 // Control message (auth, heartbeat, etc.)
-	MessageTypeHTTPRequest  MessageType = 0x01 // HTTP request
-	MessageTypeHTTPResponse MessageType = 0x02 // HTTP response
-	MessageTypeTCPData      MessageType = 0x03 // TCP data
-	MessageTypeTCPOpen      MessageType = 0x04 // TCP connection open
-	MessageTypeTCPClose     MessageType = 0x05 // TCP connection close
-	MessageTypeFlowControl  MessageType = 0x06 // Flow control message
+	MessageTypeControl          MessageType = 0x00 // Control message (auth, heartbeat, etc.)
+	MessageTypeHTTPRequest      MessageType = 0x01 // HTTP request
+	MessageTypeHTTPResponse     MessageType = 0x02 // HTTP response
+	MessageTypeTCPData          MessageType = 0x03 // TCP data
+	MessageTypeTCPOpen          MessageType = 0x04 // TCP connection open
+	MessageTypeTCPClose         MessageType = 0x05 // TCP connection close
+	MessageTypeFlowControl      MessageType = 0x06 // Flow control message
+	MessageTypeHTTPRequestHead  MessageType = 0x07 // HTTP request headers only (semantic streaming)
+	MessageTypeHTTPRequestBody  MessageType = 0x08 // HTTP request body chunk
+	MessageTypeHTTPResponseHead MessageType = 0x09 // HTTP response headers only
+	MessageTypeHTTPResponseBody MessageType = 0x0a // HTTP response body chunk
 )
 
 // MessageFlags represents message flags
@@ -156,19 +160,23 @@ const (
 
 // BinaryProtocolAdapter implements the binary protocol adapter
 type BinaryProtocolAdapter struct {
-	conn                *websocket.Conn
-	connWriteMu         *sync.Mutex // monitor conn write serialization (server)
-	dataConn            *websocket.Conn         // Optional data channel connection (legacy/shared)
-	dataWriteMu         *sync.Mutex             // Mutex for shared data channel writes
-	dataChannels        map[string]*dataChannel // Per-stream data channel connections
-	dataChannelsMu      sync.RWMutex
-	isClient            bool
-	capabilities        *client.Capabilities
-	httpRequestHandler  func(id string, data []byte) error
-	httpResponseHandler func(id string, data []byte) error
-	tcpDataHandlers     map[int]func(streamId string, data []byte) error
-	handlerMu           sync.RWMutex
-	handlerIDCounter    int
+	conn                    *websocket.Conn
+	connWriteMu             *sync.Mutex             // monitor conn write serialization (server)
+	dataConn                *websocket.Conn         // Optional data channel connection (legacy/shared)
+	dataWriteMu             *sync.Mutex             // Mutex for shared data channel writes
+	dataChannels            map[string]*dataChannel // Per-stream data channel connections
+	dataChannelsMu          sync.RWMutex
+	isClient                bool
+	capabilities            *client.Capabilities
+	httpRequestHandler      func(id string, data []byte) error
+	httpResponseHandler     func(id string, data []byte) error
+	httpRequestHeadHandler  func(id string, head []byte, fin bool) error
+	httpRequestBodyHandler  func(id string, chunk []byte, fin bool) error
+	httpResponseHeadHandler func(id string, head []byte, fin bool) error
+	httpResponseBodyHandler func(id string, chunk []byte, fin bool) error
+	tcpDataHandlers         map[int]func(streamId string, data []byte) error
+	handlerMu               sync.RWMutex
+	handlerIDCounter        int
 
 	sequenceCounter      map[string]uint32
 	sequenceCounterMu    sync.Mutex
@@ -231,9 +239,71 @@ func NewBinaryProtocolAdapter(conn *websocket.Conn, capabilities *client.Capabil
 	return adapter
 }
 
+// NegotiatedFlags returns capability flags negotiated for this adapter (0 if nil caps).
+func (a *BinaryProtocolAdapter) NegotiatedFlags() int {
+	if a == nil || a.capabilities == nil {
+		return 0
+	}
+	return a.capabilities.Flags
+}
+
 // SetConnWriteMu sets the mutex used to serialize writes on the monitor connection.
 func (a *BinaryProtocolAdapter) SetConnWriteMu(mu *sync.Mutex) {
 	a.connWriteMu = mu
+}
+
+func isSemanticHTTPMessageType(t MessageType) bool {
+	switch t {
+	case MessageTypeHTTPRequestHead, MessageTypeHTTPRequestBody,
+		MessageTypeHTTPResponseHead, MessageTypeHTTPResponseBody:
+		return true
+	default:
+		return false
+	}
+}
+
+func semanticHTTPHeadType(t MessageType) bool {
+	return t == MessageTypeHTTPRequestHead || t == MessageTypeHTTPResponseHead
+}
+
+func (a *BinaryProtocolAdapter) shouldUseSemanticHeadCompression() bool {
+	return a.capabilities != nil && a.capabilities.Flags&client.CapabilityFlagCompression != 0
+}
+
+func (a *BinaryProtocolAdapter) dispatchSemanticHTTPMessage(msg *BinaryMessage, fin bool) error {
+	payload := msg.Data
+	if semanticHTTPHeadType(msg.Type) && a.shouldUseSemanticHeadCompression() {
+		var err error
+		payload, err = a.decompressData(msg.Data)
+		if err != nil {
+			return err
+		}
+	}
+	if a.flowController != nil {
+		a.flowController.ReleaseReceiveWindow(msg.StreamID, len(msg.Data))
+	}
+
+	a.handlerMu.RLock()
+	defer a.handlerMu.RUnlock()
+	switch msg.Type {
+	case MessageTypeHTTPRequestHead:
+		if a.isClient && a.httpRequestHeadHandler != nil {
+			return a.httpRequestHeadHandler(msg.StreamID, payload, fin)
+		}
+	case MessageTypeHTTPRequestBody:
+		if a.isClient && a.httpRequestBodyHandler != nil {
+			return a.httpRequestBodyHandler(msg.StreamID, payload, fin)
+		}
+	case MessageTypeHTTPResponseHead:
+		if !a.isClient && a.httpResponseHeadHandler != nil {
+			return a.httpResponseHeadHandler(msg.StreamID, payload, fin)
+		}
+	case MessageTypeHTTPResponseBody:
+		if !a.isClient && a.httpResponseBodyHandler != nil {
+			return a.httpResponseBodyHandler(msg.StreamID, payload, fin)
+		}
+	}
+	return nil
 }
 
 func (a *BinaryProtocolAdapter) writeMonitorText(msg []byte) error {
@@ -376,6 +446,10 @@ func (a *BinaryProtocolAdapter) handleBinaryMessage(msg *BinaryMessage) error {
 			// Receive window insufficient, wait
 			time.Sleep(100 * time.Millisecond)
 		}
+	}
+
+	if isSemanticHTTPMessageType(msg.Type) {
+		return a.dispatchSemanticHTTPMessage(msg, isLast)
 	}
 
 	shouldStream := a.shouldUseStreaming(msg.Type)
@@ -970,6 +1044,118 @@ func (a *BinaryProtocolAdapter) OnHTTPResponse(handler func(id string, data []by
 	a.handlerMu.Lock()
 	defer a.handlerMu.Unlock()
 	a.httpResponseHandler = handler
+}
+
+// OnHTTPRequestHead registers a handler for semantic-streaming HTTP request headers (server -> client).
+func (a *BinaryProtocolAdapter) OnHTTPRequestHead(handler func(id string, head []byte, fin bool) error) {
+	a.handlerMu.Lock()
+	defer a.handlerMu.Unlock()
+	a.httpRequestHeadHandler = handler
+}
+
+// OnHTTPRequestBody registers a handler for semantic-streaming HTTP request body chunks.
+func (a *BinaryProtocolAdapter) OnHTTPRequestBody(handler func(id string, chunk []byte, fin bool) error) {
+	a.handlerMu.Lock()
+	defer a.handlerMu.Unlock()
+	a.httpRequestBodyHandler = handler
+}
+
+// OnHTTPResponseHead registers a handler for semantic-streaming HTTP response headers (client -> server).
+func (a *BinaryProtocolAdapter) OnHTTPResponseHead(handler func(id string, head []byte, fin bool) error) {
+	a.handlerMu.Lock()
+	defer a.handlerMu.Unlock()
+	a.httpResponseHeadHandler = handler
+}
+
+// OnHTTPResponseBody registers a handler for semantic-streaming HTTP response body chunks.
+func (a *BinaryProtocolAdapter) OnHTTPResponseBody(handler func(id string, chunk []byte, fin bool) error) {
+	a.handlerMu.Lock()
+	defer a.handlerMu.Unlock()
+	a.httpResponseBodyHandler = handler
+}
+
+func semanticMonitorEventForType(mt MessageType) string {
+	switch mt {
+	case MessageTypeHTTPRequestHead, MessageTypeHTTPRequestBody:
+		return "request"
+	case MessageTypeHTTPResponseHead, MessageTypeHTTPResponseBody:
+		return "response"
+	default:
+		return "data"
+	}
+}
+
+func (a *BinaryProtocolAdapter) sendSemanticHTTPMonitor(mt MessageType, streamId string, data []byte, flags MessageFlags) error {
+	processed := data
+	if semanticHTTPHeadType(mt) && a.shouldUseSemanticHeadCompression() {
+		var err error
+		processed, err = a.compressData(data)
+		if err != nil {
+			return err
+		}
+	}
+
+	msg := BinaryMessage{
+		Type:     mt,
+		StreamID: streamId,
+		Sequence: a.getNextSequence(streamId),
+		Flags:    flags,
+		Data:     processed,
+	}
+	messageBytes, err := BuildBinaryMessage(msg)
+	if err != nil {
+		return err
+	}
+	base64Data := base64.StdEncoding.EncodeToString(messageBytes)
+	event := semanticMonitorEventForType(mt)
+	msgJSON := []interface{}{
+		event,
+		map[string]interface{}{
+			"id":   streamId,
+			"data": base64Data,
+		},
+	}
+	msgBytes, err := json.Marshal(msgJSON)
+	if err != nil {
+		return err
+	}
+	return a.writeMonitorText(msgBytes)
+}
+
+// SendHTTPRequestHead sends tunneled HTTP request headers (semantic streaming).
+func (a *BinaryProtocolAdapter) SendHTTPRequestHead(id string, head []byte, fin bool) error {
+	fl := MessageFlags(0)
+	if fin {
+		fl |= MessageFlagFIN
+	}
+	return a.sendSemanticHTTPMonitor(MessageTypeHTTPRequestHead, id, head, fl)
+}
+
+// SendHTTPRequestBody sends a tunneled HTTP request body chunk.
+func (a *BinaryProtocolAdapter) SendHTTPRequestBody(id string, chunk []byte, fin bool) error {
+	fl := MessageFlags(0)
+	if fin {
+		fl |= MessageFlagFIN
+	}
+	return a.sendSemanticHTTPMonitor(MessageTypeHTTPRequestBody, id, chunk, fl)
+}
+
+// SendHTTPResponseHead sends tunneled HTTP response headers (semantic streaming).
+func (a *BinaryProtocolAdapter) SendHTTPResponseHead(id string, head []byte, fin bool) error {
+	fl := MessageFlags(0)
+	if fin {
+		fl |= MessageFlagFIN
+	}
+	return a.sendSemanticHTTPMonitor(MessageTypeHTTPResponseHead, id, head, fl)
+}
+
+// SendHTTPResponseBody sends a tunneled HTTP response body chunk.
+func (a *BinaryProtocolAdapter) SendHTTPResponseBody(id string, chunk []byte, fin bool) error {
+	fl := MessageFlags(0)
+	if fin {
+		fl |= MessageFlagFIN
+	}
+	return a.sendSemanticHTTPMonitor(MessageTypeHTTPResponseBody, id, chunk, fl)
 }
 
 // OnTCPData registers a TCP data handler

@@ -186,6 +186,22 @@ func (a *LegacyProtocolAdapter) SendTCPData(streamId string, data []byte) error 
 	return errors.New("TCP data transmission not supported in legacy protocol")
 }
 
+func (a *LegacyProtocolAdapter) SendHTTPRequestHead(id string, head []byte, fin bool) error {
+	return ErrSemanticHTTPNotSupported
+}
+
+func (a *LegacyProtocolAdapter) SendHTTPRequestBody(id string, chunk []byte, fin bool) error {
+	return ErrSemanticHTTPNotSupported
+}
+
+func (a *LegacyProtocolAdapter) SendHTTPResponseHead(id string, head []byte, fin bool) error {
+	return ErrSemanticHTTPNotSupported
+}
+
+func (a *LegacyProtocolAdapter) SendHTTPResponseBody(id string, chunk []byte, fin bool) error {
+	return ErrSemanticHTTPNotSupported
+}
+
 // OnHTTPRequest registers an HTTP request handler
 func (a *LegacyProtocolAdapter) OnHTTPRequest(handler func(id string, data []byte) error) {
 	a.handlerMu.Lock()
@@ -199,6 +215,21 @@ func (a *LegacyProtocolAdapter) OnHTTPResponse(handler func(id string, data []by
 	defer a.handlerMu.Unlock()
 	a.httpResponseHandler = handler
 }
+
+func (a *LegacyProtocolAdapter) OnHTTPRequestHead(handler func(id string, head []byte, fin bool) error) {
+}
+
+func (a *LegacyProtocolAdapter) OnHTTPRequestBody(handler func(id string, chunk []byte, fin bool) error) {
+}
+
+func (a *LegacyProtocolAdapter) OnHTTPResponseHead(handler func(id string, head []byte, fin bool) error) {
+}
+
+func (a *LegacyProtocolAdapter) OnHTTPResponseBody(handler func(id string, chunk []byte, fin bool) error) {
+}
+
+// NegotiatedFlags returns 0 for legacy protocol.
+func (a *LegacyProtocolAdapter) NegotiatedFlags() int { return 0 }
 
 // OnTCPData registers a TCP data handler
 func (a *LegacyProtocolAdapter) OnTCPData(handler func(streamId string, data []byte) error) func() {
@@ -288,4 +319,3 @@ func (a *LegacyProtocolAdapter) decodeResponseData(data string) ([]byte, error) 
 
 	return decoded, nil
 }
-

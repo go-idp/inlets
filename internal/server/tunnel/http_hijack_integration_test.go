@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-idp/inlets/internal/client"
 	servercontainer "github.com/go-idp/inlets/internal/server/container"
 	"github.com/go-idp/inlets/internal/server/limiter"
 	"github.com/go-idp/inlets/internal/server/protocol"
@@ -63,17 +64,77 @@ func (f *fakeHTTPTunnelAdapter) SendHTTPRequest(id string, data []byte) error {
 	return nil
 }
 
-func (f *fakeHTTPTunnelAdapter) SendHTTPResponse(id string, data []byte) error  { return nil }
+func (f *fakeHTTPTunnelAdapter) SendHTTPResponse(id string, data []byte) error { return nil }
+func (f *fakeHTTPTunnelAdapter) SendHTTPRequestHead(id string, head []byte, fin bool) error {
+	return protocol.ErrSemanticHTTPNotSupported
+}
+func (f *fakeHTTPTunnelAdapter) SendHTTPRequestBody(id string, chunk []byte, fin bool) error {
+	return protocol.ErrSemanticHTTPNotSupported
+}
+func (f *fakeHTTPTunnelAdapter) SendHTTPResponseHead(id string, head []byte, fin bool) error {
+	return nil
+}
+func (f *fakeHTTPTunnelAdapter) SendHTTPResponseBody(id string, chunk []byte, fin bool) error {
+	return nil
+}
 func (f *fakeHTTPTunnelAdapter) SendTCPData(streamId string, data []byte) error { return nil }
 func (f *fakeHTTPTunnelAdapter) OnHTTPRequest(handler func(id string, data []byte) error) {
 }
 func (f *fakeHTTPTunnelAdapter) OnHTTPResponse(handler func(id string, data []byte) error) {
+}
+func (f *fakeHTTPTunnelAdapter) OnHTTPRequestHead(handler func(id string, head []byte, fin bool) error) {
+}
+func (f *fakeHTTPTunnelAdapter) OnHTTPRequestBody(handler func(id string, chunk []byte, fin bool) error) {
+}
+func (f *fakeHTTPTunnelAdapter) OnHTTPResponseHead(handler func(id string, head []byte, fin bool) error) {
+}
+func (f *fakeHTTPTunnelAdapter) OnHTTPResponseBody(handler func(id string, chunk []byte, fin bool) error) {
 }
 func (f *fakeHTTPTunnelAdapter) OnTCPData(handler func(streamId string, data []byte) error) func() {
 	return func() {}
 }
 func (f *fakeHTTPTunnelAdapter) Destroy()                      {}
 func (f *fakeHTTPTunnelAdapter) SetConnWriteMu(mu *sync.Mutex) {}
+
+func (f *fakeHTTPTunnelAdapter) NegotiatedFlags() int { return 0 }
+
+// streamRecordAdapter captures semantic HTTP request head/body frames for tests.
+type streamRecordAdapter struct {
+	fakeHTTPTunnelAdapter
+	mu         sync.Mutex
+	heads      [][]byte
+	bodies     [][]byte
+	bodyFins   []bool
+	onComplete func(tcpID, reqID string)
+}
+
+func (s *streamRecordAdapter) NegotiatedFlags() int {
+	return client.CapabilityFlagHTTPBodyStream | client.CapabilityFlagBinaryProtocol
+}
+
+func (s *streamRecordAdapter) SendHTTPRequest(id string, data []byte) error {
+	return protocol.ErrSemanticHTTPNotSupported
+}
+
+func (s *streamRecordAdapter) SendHTTPRequestHead(id string, head []byte, fin bool) error {
+	s.mu.Lock()
+	s.heads = append(s.heads, append([]byte(nil), head...))
+	s.mu.Unlock()
+	_ = fin
+	return nil
+}
+
+func (s *streamRecordAdapter) SendHTTPRequestBody(id string, chunk []byte, fin bool) error {
+	s.mu.Lock()
+	s.bodies = append(s.bodies, append([]byte(nil), chunk...))
+	s.bodyFins = append(s.bodyFins, fin)
+	s.mu.Unlock()
+	tcpID, reqID, ok := splitTunnelWireID(id)
+	if ok && fin && s.onComplete != nil {
+		s.onComplete(tcpID, reqID)
+	}
+	return nil
+}
 
 func (f *fakeHTTPTunnelAdapter) captured() [][]byte {
 	f.mu.Lock()
@@ -102,7 +163,7 @@ func dummyWSSocket() *websocket.Conn {
 	return new(websocket.Conn)
 }
 
-func startTunnelHTTPServer(t *testing.T, ctx *types.Context, domain string) (baseURL string, cleanup func()) {
+func startTunnelHTTPServer(t *testing.T, ctx *types.Context, domain string) (baseURL string, ht *HTTPTunnel, cleanup func()) {
 	t.Helper()
 	mux := http.NewServeMux()
 	srv := &http.Server{Handler: mux}
@@ -110,12 +171,12 @@ func startTunnelHTTPServer(t *testing.T, ctx *types.Context, domain string) (bas
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	ht := CreateHTTPTunnel(ctx, domain)
+	ht = CreateHTTPTunnel(ctx, domain)
 	ht.Attach(srv)
 	go func() {
 		_ = srv.Serve(ln)
 	}()
-	return "http://" + ln.Addr().String(), func() {
+	return "http://" + ln.Addr().String(), ht, func() {
 		_ = srv.Close()
 		_ = ln.Close()
 	}
@@ -143,7 +204,7 @@ func TestHTTPTunnelHijackFirstRequestDoesNotBlock(t *testing.T) {
 	adapter.callbacks = ctx.CallbackContainer
 	registerAppExampleMapping(t, ctx, adapter)
 
-	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	baseURL, _, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
 	defer cleanup()
 
 	host := strings.TrimPrefix(baseURL, "http://")
@@ -187,7 +248,7 @@ func TestHTTPTunnelRequestBodyTooLargeBeforeHijack(t *testing.T) {
 	defer func() { maxHTTPTunnelRequestBodyBytes = old }()
 
 	ctx := testTunnelContext()
-	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	baseURL, _, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
 	defer cleanup()
 	host := strings.TrimPrefix(baseURL, "http://")
 
@@ -227,7 +288,7 @@ func TestHTTPTunnelKeepAliveRequestBodyTooLarge(t *testing.T) {
 	adapter.callbacks = ctx.CallbackContainer
 	registerAppExampleMapping(t, ctx, adapter)
 
-	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	baseURL, _, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
 	defer cleanup()
 	host := strings.TrimPrefix(baseURL, "http://")
 
@@ -281,7 +342,7 @@ func TestHTTPTunnelHijackKeepAliveSecondRequest(t *testing.T) {
 	adapter.callbacks = ctx.CallbackContainer
 	registerAppExampleMapping(t, ctx, adapter)
 
-	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	baseURL, _, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
 	defer cleanup()
 	host := strings.TrimPrefix(baseURL, "http://")
 
@@ -341,7 +402,7 @@ func TestHTTPTunnelHijackPOSTBodyBeforeHijack(t *testing.T) {
 	adapter.callbacks = ctx.CallbackContainer
 	registerAppExampleMapping(t, ctx, adapter)
 
-	baseURL, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	baseURL, _, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
 	defer cleanup()
 	host := strings.TrimPrefix(baseURL, "http://")
 
@@ -374,5 +435,107 @@ func TestHTTPTunnelHijackPOSTBodyBeforeHijack(t *testing.T) {
 	}
 	if !strings.Contains(raw, payload) {
 		t.Fatalf("POST body not in tunneled raw: %q", raw)
+	}
+}
+
+func TestHTTPTunnelDispatchSemanticClientResponse(t *testing.T) {
+	ctx := testTunnelContext()
+	ht := CreateHTTPTunnel(ctx, "example.com")
+
+	r, w := net.Pipe()
+	defer r.Close()
+	defer w.Close()
+
+	const tcpID, reqID = "tsem", "rsem"
+	key := tcpID + ":" + reqID
+	ht.streamRespMu.Lock()
+	ht.streamResp[key] = &streamResponseSession{tcpConn: w, clientID: "c", subDomain: "s"}
+	ht.streamRespMu.Unlock()
+
+	head := []byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+	errCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, len(head))
+		_, err := io.ReadFull(r, buf)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(buf) != string(head) {
+			errCh <- fmt.Errorf("read %q want %q", buf, head)
+			return
+		}
+		errCh <- nil
+	}()
+
+	if !ht.dispatchSemanticClientResponse(tcpID, reqID, uint8(protocol.MessageTypeHTTPResponseHead), head, true) {
+		_ = w.Close()
+		<-errCh
+		t.Fatal("dispatch returned false")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	ht.streamRespMu.Lock()
+	_, exists := ht.streamResp[key]
+	ht.streamRespMu.Unlock()
+	if exists {
+		t.Fatal("stream session should be removed after FIN head")
+	}
+}
+
+func TestHTTPTunnelSemanticStreamPOSTReassemblesHeadAndBody(t *testing.T) {
+	ctx := testTunnelContext()
+	ad := &streamRecordAdapter{}
+	ad.callbacks = ctx.CallbackContainer
+	baseURL, ht, cleanup := startTunnelHTTPServer(t, ctx, "example.com")
+	defer cleanup()
+	ad.onComplete = func(tcpID, reqID string) {
+		raw := []byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+		if !ht.dispatchSemanticClientResponse(tcpID, reqID, uint8(protocol.MessageTypeHTTPResponseHead), raw, true) {
+			t.Error("dispatchSemanticClientResponse expected true")
+		}
+	}
+	registerAppExampleMapping(t, ctx, ad)
+	host := strings.TrimPrefix(baseURL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	payload := "hello"
+	fmt.Fprintf(conn, "POST /p HTTP/1.1\r\nHost: app.example.com\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+		len(payload), payload)
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+
+	ad.mu.Lock()
+	defer ad.mu.Unlock()
+	if len(ad.heads) != 1 {
+		t.Fatalf("expected 1 head frame, got %d", len(ad.heads))
+	}
+	if !strings.Contains(string(ad.heads[0]), "Host: app.example.com") {
+		t.Fatalf("head missing Host: %q", ad.heads[0])
+	}
+	var sb strings.Builder
+	sb.Write(ad.heads[0])
+	for _, b := range ad.bodies {
+		sb.Write(b)
+	}
+	full := sb.String()
+	if !strings.Contains(full, "POST /p ") || !strings.Contains(full, payload) {
+		t.Fatalf("reassembled request missing POST or body: %q", full)
+	}
+	if len(ad.bodyFins) == 0 || !ad.bodyFins[len(ad.bodyFins)-1] {
+		t.Fatalf("expected last body chunk FIN, got %v", ad.bodyFins)
 	}
 }

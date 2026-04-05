@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"io"
+	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/go-idp/inlets/internal/client"
 )
 
 // compressGzip compresses a string using gzip and returns base64-encoded result
@@ -111,6 +113,23 @@ func compressGzipBytes(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// DecompressBinaryPayloadForCapabilities decompresses a binary frame payload when compression is negotiated (e.g. semantic HTTP head).
+func DecompressBinaryPayloadForCapabilities(caps *client.Capabilities, data []byte) ([]byte, error) {
+	if caps == nil || caps.Flags&client.CapabilityFlagCompression == 0 || len(data) == 0 {
+		return data, nil
+	}
+	alg := "brotli"
+	if caps.Features != nil && caps.Features.Compression != nil && caps.Features.Compression.Preferred != "" {
+		alg = strings.ToLower(caps.Features.Compression.Preferred)
+	}
+	switch alg {
+	case "gzip":
+		return decompressGzipBytes(data)
+	default:
+		return decompressBrotli(data)
+	}
+}
+
 // decompressGzipBytes decompresses gzip bytes
 func decompressGzipBytes(data []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
@@ -127,4 +146,3 @@ func decompressGzipBytes(data []byte) ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
-

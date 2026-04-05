@@ -31,6 +31,7 @@ const (
 	CapabilityFlagHTTPStreaming
 	CapabilityFlagTCPOverWS
 	CapabilityFlagTCPMultiplex
+	CapabilityFlagHTTPBodyStream // semantic HTTP head+body chunking (not WS-level message chunking)
 )
 
 type Options struct {
@@ -154,7 +155,8 @@ func GetClientCapabilities(version string) *Capabilities {
 			CapabilityFlagStreaming |
 			CapabilityFlagFlowControl |
 			CapabilityFlagHTTPBinary |
-			CapabilityFlagTCPOverWS,
+			CapabilityFlagTCPOverWS |
+			CapabilityFlagHTTPBodyStream,
 		Version: "2.0.0",
 		Features: &CapabilityFeatures{
 			Compression: &CompressionFeatures{

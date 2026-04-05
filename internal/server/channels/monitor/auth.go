@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -274,6 +275,35 @@ func handleResponse(ctx *types.Context, wsConn *WebSocketConnection, payload int
 	}
 	tcpId := parts[0]
 	requestId := strings.Join(parts[1:], ":")
+
+	rawOuter, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		logger.Infof("[monitor:ws] handleResponse: base64 decode: %v", err)
+		return
+	}
+	if bm, perr := protocol.ParseBinaryMessage(rawOuter); perr == nil {
+		if bm.Type == protocol.MessageTypeHTTPResponseHead || bm.Type == protocol.MessageTypeHTTPResponseBody {
+			payload := bm.Data
+			if bm.Type == protocol.MessageTypeHTTPResponseHead && wsConn != nil {
+				var derr error
+				payload, derr = protocol.DecompressBinaryPayloadForCapabilities(wsConn.Capabilities, payload)
+				if derr != nil {
+					logger.Infof("[monitor:ws] handleResponse: decompress response head: %v", derr)
+					return
+				}
+			}
+			if ctx.HTTPStreamDispatch == nil {
+				logger.Infof("[monitor:ws] handleResponse: semantic HTTP response but HTTPStreamDispatch unset")
+				return
+			}
+			fin := (bm.Flags & protocol.MessageFlagFIN) != 0
+			if !ctx.HTTPStreamDispatch(tcpId, requestId, uint8(bm.Type), payload, fin) {
+				logger.Infof("[monitor:ws] handleResponse: no stream session for semantic frame id %q", id)
+			}
+			return
+		}
+	}
+
 	callback := ctx.CallbackContainer.Take(tcpId, requestId)
 	if callback == nil {
 		logger.Infof("[monitor:ws] handleResponse: no pending tunnel request for id %q", id)
@@ -281,7 +311,7 @@ func handleResponse(ctx *types.Context, wsConn *WebSocketConnection, payload int
 	}
 	decoded, err := base64Decode(data)
 	if err != nil {
-		logger.Infof("[monitor:ws] handleResponse: base64 decode: %v", err)
+		logger.Infof("[monitor:ws] handleResponse: base64 decode inner: %v", err)
 		return
 	}
 	callback(decoded)
