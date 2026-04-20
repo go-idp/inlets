@@ -452,7 +452,11 @@ func (a *BinaryProtocolAdapter) HandleBinaryMessage(message []byte) error {
 		logger.Infof("[protocol:binary] Failed to parse binary message: %v, message length: %d bytes, first %d bytes (hex): %s", err, len(message), previewLen, previewHex)
 		return fmt.Errorf("failed to parse binary message: %w", err)
 	}
-	return a.handleBinaryMessage(binaryMsg)
+	if err := a.handleBinaryMessage(binaryMsg); err != nil {
+		logger.Infof("[protocol:binary] handleBinaryMessage failed: type=%v streamId=%q: %v", binaryMsg.Type, binaryMsg.StreamID, err)
+		return err
+	}
+	return nil
 }
 
 // handleBinaryMessage handles a received binary message

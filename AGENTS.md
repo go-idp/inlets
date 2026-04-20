@@ -318,6 +318,8 @@ go func() {
 1. **认证前 binary**：`/_/monitor` 在 **`isAuthenticated == false`** 时若收到 **binary** 帧，**每条连接只打一条** 说明性日志，提示先完成文本 **`authenticate`**。
 2. **`request` 路径**：注释写明新协议下 **HTTP 仍走监控通道** 的 `request`+base64 载荷，**TCP 数据** 走 **`/_/data`**，避免与「全部走 data」混淆。
 3. **流控发送等待**：`BinaryProtocolAdapter.waitFlowSendSlot` 使用 **5ms→100ms  capped 指数退避** 替代固定 50ms 忙等。
+4. **`HandleBinaryMessage` 分发失败日志**：解析失败已有 hex 预览；**`handleBinaryMessage` 返回错误** 时再打一条（`type`、`streamId`），与解析失败区分。
+5. **`NEW_PROTOCOL_ISSUES.md` 文末**：优先级清单标为历史存档，**权威状态** 以文首 **2026-04-20** 与概览表为准；**TCP over WS 不回退监控** 见文档第 12 点。
 
 ### 相关文件
 

@@ -38,6 +38,13 @@
 10. **流控发送忙等（已优化）**
     - `sendStreaming` / `sendStreamingViaDataChannel` 中等待窗口由 **固定 50ms sleep** 改为 **`waitFlowSendSlot`**：**5ms 起、上限 100ms 的指数退避**，减轻窗口长时间满载时的定时器唤醒频率。
 
+11. **二进制解析 / 分发错误（已改进）**
+    - **`ParseBinaryMessage` 失败**：已有长度与 **hex 预览** 日志。
+    - **`handleBinaryMessage` 返回错误**：`HandleBinaryMessage` 现 **追加日志**（`type`、`streamId`、错误原因），便于区分解析失败与业务处理失败。
+
+12. **数据通道失败回退监控（不采纳，已澄清）**
+    - **TCP over WebSocket** 路径 **`SendTCPData`** 在 data channel 未就绪时 **显式报错**（避免静默挂死）；回退到监控通道会 **混淆语义** 且可能突破每连接设计。容错应在 **客户端重连 data** 或 **服务端快速失败** 上解决，而非自动回退。
+
 ---
 
 ## 最新修复状态（2026-03-15）
@@ -79,7 +86,9 @@
 | 🟢 已澄清 | HTTP `request` 走监控通道 | `channels/monitor/new.go` | 见第 8 点 |
 | 🟢 文档过时 | 流控 RUnlock 升级 | `flow_controller.go` | 见第 9 点 |
 | 🟢 已优化 | 流控发送退避 | `protocol/binary.go` | 见第 10 点 |
-| 🟢 低 | 错误处理不完整 | 多处 | 可维护性（未收口） |
+| 🟢 已改进 | 二进制解析与分发错误可观测性 | `protocol/binary.go` | 见第 11 点 |
+| 🟢 已澄清 | data 失败不回退监控（TCP over WS） | `protocol/binary.go` | 见第 12 点 |
+| 🟢 低 | 其余错误路径收口 | 多处 | 按模块逐步加强 |
 
 ---
 
@@ -328,84 +337,38 @@ if window == nil {
 
 ### 10. 🟢 流式传输的流控检查使用忙等待
 
-**位置：** `internal/server/protocol/binary.go:676-682`
+**状态（2026-04-20）：** 已改为 **`waitFlowSendSlot`**（5ms 起、封顶 100ms 的指数退避），见 `binary.go`。
 
-**问题描述：**
-使用 `time.Sleep` 进行忙等待，可能阻塞 goroutine。
-
-**代码：**
-```go
-for !a.flowController.CanSend(streamId, len(chunk)) {
-    time.Sleep(50 * time.Millisecond)  // 忙等待
-}
-```
-
-**影响：**
-- 性能问题
-- 资源浪费
-
-**建议修复：**
-使用 channel 或条件变量实现更高效的等待机制。
+**原问题描述：** 固定 `time.Sleep(50ms)` 忙等待。
 
 ---
 
 ### 11. 🟢 二进制消息解析错误处理不完整
 
-**位置：** `internal/server/protocol/binary.go:320-326`
-
-**问题描述：**
-解析失败时只返回错误，没有日志记录，难以排查问题。
-
-**代码：**
-```go
-func (a *BinaryProtocolAdapter) HandleBinaryMessage(message []byte) error {
-    binaryMsg, err := ParseBinaryMessage(message)
-    if err != nil {
-        return err  // 只返回错误，没有日志
-    }
-    return a.handleBinaryMessage(binaryMsg)
-}
-```
-
-**影响：**
-- 调试困难
-- 问题排查不便
-
-**建议修复：**
-添加日志记录，包括错误信息和原始消息的前几个字节。
+**状态（2026-04-20）：** 解析失败已有 **hex 预览** 日志；**`handleBinaryMessage` 返回错误** 时 `HandleBinaryMessage` **追加日志**（type / streamId）。
 
 ---
 
 ### 12. 🟢 数据通道连接失败时的回退机制缺失
 
-**问题描述：**
-如果数据通道连接失败，新协议没有回退到监控通道的机制，可能导致功能不可用。
-
-**影响：**
-- 容错性差
-- 用户体验不佳
-
-**建议修复：**
-实现回退机制，在数据通道不可用时自动使用监控通道。
+**状态（2026-04-20）：** **不实现** 自动回退监控通道；TCP over WS 在 data 未就绪时 **快速失败**（`SendTCPData`），见概览表第 12 点说明。
 
 ---
 
-## 修复建议优先级
+## 修复建议优先级（历史存档）
 
-### 高优先级（立即修复）
-1. 流式传输序列号不一致
-2. 流式传输缺少 onComplete 回调
-3. 流控窗口竞态条件
+以下列表反映 **2024 年文档初稿** 的排序，**多数条目已在文首「2026-04-20」节标为已修复/已澄清**。新排期请 **以文首表格与 2026-04-20 节为准**。
 
-### 中优先级（尽快修复）
-4. 流控窗口未正确清理
-5. 数据通道验证竞态条件
-6. 流式传输流重组失败处理
+### 原高优先级
+1. 流式传输序列号 — **已澄清**（按 `streamId` 隔离）
+2. 流式传输 onComplete / AddChunk — **已修复**（EnsureStream）
+3. 流控竞态 — **已缓解**（TrySend）
 
-### 低优先级（逐步优化）
-7. 错误处理完善
-8. 忙等待优化
-9. 其他改进
+### 原中优先级
+4–6. 数据通道清理、Upgrade 竞态、流重组卡住 — **已缓解**（见 2026-04-20）
+
+### 原低优先级
+7–10. 见文首 2026-04-20 第 7–10 点及本节问题 11–12。
 
 ---
 
@@ -445,6 +408,6 @@ func (a *BinaryProtocolAdapter) HandleBinaryMessage(message []byte) error {
 
 ---
 
-**最后更新：** 2024-12-19  
-**文档版本：** 1.0
+**最后更新：** 2026-04-20  
+**文档版本：** 1.1（以文首「最新修复状态（2026-04-20）」与「问题概览」表为权威状态）
 
