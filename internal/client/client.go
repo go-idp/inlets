@@ -546,6 +546,9 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 				if msg, ok := errMsg["message"].(string); ok {
 					c.logger.Printf("Server error: %s", msg)
 				}
+				if fatal, _ := errMsg["fatal"].(bool); fatal {
+					os.Exit(1)
+				}
 			}
 		case "@@CONFIG":
 			c.handleSocketConfig(payload)

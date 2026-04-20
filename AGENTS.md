@@ -237,3 +237,36 @@ go func() {
 - `internal/server/channels/monitor/auth.go`：`handleResponse` 语义分支
 - `internal/client/handlers.go`：`handleHTTPRequest` 按类型分发、流式响应发送
 - `internal/client/types.go`、`internal/server/channels/monitor/helpers.go`：能力协商
+
+## 2026-04-20: TCP 公网监听失效与端口占用
+
+### 问题现象
+
+- 服务端已为容器创建 TCP 隧道并 `Listen` 后，若 accept 循环因 **`Accept` 永久错误** 或 **listener 已关闭** 退出，容器上仍保留非 nil 的 **`SourceServer`**，而 `CreateServer` 在 `SourceServer != nil` 时直接跳过，**永远不会再监听**；隧道事件仅在认证成功时触发一次，**监控 WebSocket 未断时客户端不会重连**，用户侧公网 TCP 入口永久不可用。
+- 客户端指定或动态分配的隧道端口若已被占用，`Listen` 失败；若仍先发 **`tcp:ready`** 再 `Listen`，客户端会误以为隧道已就绪。
+
+### 做法
+
+1. **Accept 退出后自愈**：在 `runTCPAcceptLoop` 中，对非临时 `Accept` 错误：`Set(containerId, "sourceServer", nil)` 清除陈旧 listener，再调用 **`CreateServer`** 重建监听；临时错误短暂 sleep 后重试 `Accept`。
+2. **端口复用**：`CreateServer` 在客户端未指定非零 `TunnelPort` 时，若已有 **`SourcePort`**（例如上次成功监听过的端口），优先复用该端口，避免恢复时随机换端口。
+3. **`sourceServer` 置空**：`internal/server/container/tunnel.go` 中 `Set(..., "sourceServer", nil)` 支持将监听句柄清空，便于重建路径与销毁逻辑一致。
+4. **绑定失败与客户端退出**：**先 `net.Listen`，成功后再发 `tcp:ready`**。若 `Listen` 失败（含 `address already in use`），通过监控通道发送 `["error", { "message": "...", "fatal": true, "code": "tcp_listen_failed" }]`；客户端在 `handleMonitorMessages` 中对 **`fatal` 为 true 的 error** 执行 **`os.Exit(1)`**，避免进程空转。
+5. **测试**：`internal/server/tunnel/tcp_test.go` 中 `TestTCPCreateServerReusesSourcePort`、`TestTCPTunnelListenerRecreatesOnClose` 覆盖端口复用与关闭 listener 后自动重建。
+
+### 经验总结
+
+1. **状态机**：长期运行的 listener 与容器字段 **`SourceServer` 必须同步**；goroutine 退出时要么在进程内重建并更新引用，要么显式清空并依赖下一次控制面事件，不能留下「已关闭 listener + 非 nil 字段」的组合。
+2. **消息顺序**：对依赖本地资源（端口、文件）就绪的控制消息，应在 **资源分配成功之后** 再通知对端，否则对端无法区分「未就绪」与「永久失败」。
+3. **不可恢复错误**：端口冲突等应 **带结构化 fatal 标志** 通知客户端并退出，便于编排系统重启或换配置；仅靠服务端日志不足以让客户端停止重试或告警。
+4. **审查清单**（TCP 隧道）:
+   - [ ] `tcp:ready` 是否在 `Listen` 成功之后发送？
+   - [ ] accept 退出路径是否清除 `SourceServer` 并触发重建或明确失败？
+   - [ ] 动态端口场景恢复是否复用 `SourcePort`？
+   - [ ] `Listen` 失败是否通知客户端并 `fatal` 退出？
+
+### 相关文件
+
+- `internal/server/tunnel/tcp.go`：`CreateServer`、`sendTCPListenFatalError`、`runTCPAcceptLoop`
+- `internal/server/container/tunnel.go`：`Set` 的 `sourceServer` / `nil`
+- `internal/client/client.go`：监控通道 `error` + `fatal`
+- `internal/server/tunnel/tcp_test.go`：上述回归测试

@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -58,13 +59,14 @@ func (t *TCPTunnel) CreateServer(options Options) error {
 	}
 
 	// Get or allocate source port
-	// Use TunnelPort if specified by client, otherwise allocate an available port
+	// Use TunnelPort if specified by client; else reuse SourcePort after listener recovery;
+	// otherwise allocate an available port.
 	var sourcePort int
 	if container.TunnelPort != nil && *container.TunnelPort != 0 {
-		// Client specified a tunnel port - use it
 		sourcePort = *container.TunnelPort
+	} else if container.SourcePort != nil && *container.SourcePort != 0 {
+		sourcePort = *container.SourcePort
 	} else {
-		// Allocate available port
 		port, err := getAvailablePort()
 		if err != nil {
 			return fmt.Errorf("failed to allocate port: %v", err)
@@ -77,7 +79,14 @@ func (t *TCPTunnel) CreateServer(options Options) error {
 		return fmt.Errorf("failed to set source port: %v", err)
 	}
 
-	// Notify client that TCP server is ready
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", sourcePort))
+	if err != nil {
+		listenErr := fmt.Errorf("failed to listen on port %d: %v", sourcePort, err)
+		sendTCPListenFatalError(container, listenErr)
+		return listenErr
+	}
+
+	// Notify client only after the public listener is bound (avoids tcp:ready when bind fails).
 	tcpReadyData := map[string]interface{}{
 		"host": domain,
 		"port": sourcePort,
@@ -88,59 +97,81 @@ func (t *TCPTunnel) CreateServer(options Options) error {
 	}
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
+		listener.Close()
 		return fmt.Errorf("failed to marshal tcp:ready message: %v", err)
 	}
 
-	// Use writeMu to protect WriteMessage (gorilla/websocket requires serialized writes)
 	if container.WriteMu != nil {
 		container.WriteMu.Lock()
-		defer container.WriteMu.Unlock()
+		err = container.WSSocket.WriteMessage(websocket.TextMessage, messageBytes)
+		container.WriteMu.Unlock()
+	} else {
+		err = container.WSSocket.WriteMessage(websocket.TextMessage, messageBytes)
 	}
-	if err := container.WSSocket.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
+	if err != nil {
+		listener.Close()
 		return fmt.Errorf("failed to send tcp:ready message: %v", err)
 	}
 
-	// Create source TCP server (for user connections)
-	return t.createSourceTCPServer(domain, sourcePort, containerID, container)
-}
-
-// createSourceTCPServer creates a TCP server that listens for user connections
-func (t *TCPTunnel) createSourceTCPServer(
-	domain string,
-	port int,
-	containerID string,
-	container *types.TunnelMapping,
-) error {
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		return fmt.Errorf("failed to listen on port %d: %v", port, err)
-	}
-
-	// Update container with source server
 	if err := t.ctx.Container.Set(containerID, "sourceServer", listener); err != nil {
 		listener.Close()
 		return fmt.Errorf("failed to set source server: %v", err)
 	}
 
-	logger.Infof("[tunnel:tcp   ] listen at 0.0.0.0:%d", port)
+	logger.Infof("[tunnel:tcp   ] listen at 0.0.0.0:%d", sourcePort)
 
-	// Accept connections in a goroutine
-	go func() {
-		defer listener.Close()
-
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				// Listener closed
-				return
-			}
-
-			// Handle connection
-			go t.handleSourceConnection(conn, containerID, container)
-		}
-	}()
-
+	go t.runTCPAcceptLoop(listener, domain, containerID, container)
 	return nil
+}
+
+// sendTCPListenFatalError tells the client the TCP tunnel could not be opened; client should exit.
+func sendTCPListenFatalError(container *types.TunnelMapping, listenErr error) {
+	if container == nil || container.WSSocket == nil || listenErr == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"message": listenErr.Error(),
+		"fatal":   true,
+		"code":    "tcp_listen_failed",
+	}
+	msg := []interface{}{"error", payload}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	if container.WriteMu != nil {
+		container.WriteMu.Lock()
+		defer container.WriteMu.Unlock()
+	}
+	_ = container.WSSocket.WriteMessage(websocket.TextMessage, b)
+}
+
+func (t *TCPTunnel) runTCPAcceptLoop(l net.Listener, domain string, containerID string, container *types.TunnelMapping) {
+	defer l.Close()
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			if errors.Is(err, net.ErrClosed) {
+				logger.Infof("[tunnel:tcp   ] listener closed for container %s", containerID)
+			} else {
+				logger.Infof("[tunnel:tcp   ] accept error for container %s: %v — recreating listener", containerID, err)
+			}
+			if err := t.ctx.Container.Set(containerID, "sourceServer", nil); err != nil {
+				logger.Infof("[tunnel:tcp   ] clear sourceServer for %s: %v", containerID, err)
+			}
+			if recErr := t.CreateServer(Options{ContainerID: containerID, Domain: domain}); recErr != nil {
+				logger.Infof("[tunnel:tcp   ] failed to recreate TCP listener for %s: %v", containerID, recErr)
+			}
+			return
+		}
+
+		go t.handleSourceConnection(conn, containerID, container)
+	}
 }
 
 // handleSourceConnection handles a new source connection (user connection)

@@ -102,7 +102,9 @@ func (c *tunnelContainer) Set(id string, key string, value interface{}) error {
 			mapping.SourcePort = port
 		}
 	case "sourceServer":
-		if srv, ok := value.(net.Listener); ok {
+		if value == nil {
+			mapping.SourceServer = nil
+		} else if srv, ok := value.(net.Listener); ok {
 			mapping.SourceServer = srv
 		}
 	case "targetPort":
