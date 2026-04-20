@@ -57,11 +57,28 @@ type Options struct {
 
 // TunnelSpec is a declared tunnel for a client (server YAML and authenticate config payload).
 type TunnelSpec struct {
-	Name       string `yaml:"name" json:"name"`
-	Type       string `yaml:"type" json:"type"`
-	Upstream   string `yaml:"upstream" json:"upstream"`
-	SubDomain  string `yaml:"subDomain" json:"subDomain,omitempty"`   // HTTP: empty = use client -s (or server-assigned when both empty)
-	RemotePort int    `yaml:"remotePort" json:"remotePort,omitempty"` // TCP: 0 or omit = use client -p; else pin public listen port on server
+	Name       string                `yaml:"name" json:"name"`
+	Type       string                `yaml:"type" json:"type"`
+	Upstream   string                `yaml:"upstream" json:"upstream"`
+	SubDomain  string                `yaml:"subDomain" json:"subDomain,omitempty"`   // HTTP: empty = use client -s (or server-assigned when both empty)
+	RemotePort int                   `yaml:"remotePort" json:"remotePort,omitempty"` // TCP: 0 or omit = use client -p; else pin public listen port on server
+	Auth       *HTTPIncomingAuthRule `yaml:"auth" json:"auth,omitempty"`             // HTTP: optional auth policy validated at server before forwarding.
+	// Deprecated: use auth.enable + auth.users.
+	Auths []HTTPTunnelAuth `yaml:"auths" json:"auths,omitempty"`
+}
+
+// HTTPTunnelAuth configures allowed Authorization values for incoming HTTP requests at the server.
+type HTTPTunnelAuth struct {
+	Type     string `yaml:"type" json:"type"` // basic | bearer
+	Username string `yaml:"username" json:"username,omitempty"`
+	Password string `yaml:"password" json:"password,omitempty"`
+	Token    string `yaml:"token" json:"token,omitempty"`
+}
+
+// HTTPIncomingAuthRule controls incoming Authorization checks for tunneled HTTP requests.
+type HTTPIncomingAuthRule struct {
+	Enable bool             `yaml:"enable" json:"enable"`
+	Users  []HTTPTunnelAuth `yaml:"users" json:"users,omitempty"`
 }
 
 type CompressionFeatures struct {

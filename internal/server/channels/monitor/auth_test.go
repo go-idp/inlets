@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"testing"
 
+	"github.com/go-idp/inlets/internal/client"
 	servercontainer "github.com/go-idp/inlets/internal/server/container"
 	"github.com/go-idp/inlets/internal/server/types"
 )
@@ -45,3 +46,100 @@ func TestHandleResponseConsumesCallbackOnce(t *testing.T) {
 	}
 }
 
+func TestResolveMatchedHTTPAuths_FallbackBySubdomain(t *testing.T) {
+	auth := &client.Authentication{
+		Type:      "http",
+		SubDomain: "myapp",
+		Port:      8080, // does not match spec upstream port
+	}
+	cfg := &client.Config{
+		Tunnels: []client.TunnelSpec{
+			{
+				Name:      "web",
+				Type:      "http",
+				Upstream:  "127.0.0.1:9000",
+				SubDomain: "myapp",
+				Auth: &client.HTTPIncomingAuthRule{
+					Enable: true,
+					Users: []client.HTTPTunnelAuth{
+						{Type: "bearer", Token: "server-token"},
+					},
+				},
+			},
+		},
+	}
+
+	got := resolveMatchedHTTPAuths(auth, cfg)
+	if len(got) != 1 || got[0].Type != "bearer" || got[0].Token != "server-token" {
+		t.Fatalf("unexpected matched auths: %+v", got)
+	}
+}
+
+func TestResolveMatchedHTTPAuths_FallbackSingleHTTPAuthSpec(t *testing.T) {
+	auth := &client.Authentication{
+		Type:      "http",
+		SubDomain: "random",
+		Port:      7777,
+	}
+	cfg := &client.Config{
+		Tunnels: []client.TunnelSpec{
+			{
+				Name:     "one-http",
+				Type:     "http",
+				Upstream: "127.0.0.1:9000",
+				Auth: &client.HTTPIncomingAuthRule{
+					Enable: true,
+					Users: []client.HTTPTunnelAuth{
+						{Type: "basic", Username: "u", Password: "p"},
+					},
+				},
+			},
+			{
+				Name:       "one-tcp",
+				Type:       "tcp",
+				Upstream:   "127.0.0.1:22",
+				RemotePort: 20200,
+			},
+		},
+	}
+
+	got := resolveMatchedHTTPAuths(auth, cfg)
+	if len(got) != 1 || got[0].Type != "basic" || got[0].Username != "u" {
+		t.Fatalf("unexpected matched auths: %+v", got)
+	}
+}
+
+func TestRequiresModernClientForAdvancedFeatures(t *testing.T) {
+	cfgWithTunnels := &client.Config{
+		Tunnels: []client.TunnelSpec{
+			{Name: "web", Type: "http", Upstream: "127.0.0.1:9000"},
+		},
+	}
+	if blocked, _ := requiresModernClientForAdvancedFeatures("1.2.1", &client.Authentication{Type: "http"}, cfgWithTunnels); !blocked {
+		t.Fatalf("expected old client to be blocked when tunnels are configured")
+	}
+
+	cfgWithHTTPAuth := &client.Config{
+		Tunnels: []client.TunnelSpec{
+			{
+				Name:      "web",
+				Type:      "http",
+				Upstream:  "127.0.0.1:9000",
+				SubDomain: "myapp",
+				Auth: &client.HTTPIncomingAuthRule{
+					Enable: true,
+					Users: []client.HTTPTunnelAuth{
+						{Type: "bearer", Token: "t"},
+					},
+				},
+			},
+		},
+	}
+	if blocked, _ := requiresModernClientForAdvancedFeatures("1.2.1", &client.Authentication{Type: "http", SubDomain: "myapp"}, cfgWithHTTPAuth); !blocked {
+		t.Fatalf("expected old client to be blocked when HTTP auth is configured")
+	}
+
+	if blocked, _ := requiresModernClientForAdvancedFeatures("2.0.0", &client.Authentication{Type: "http", SubDomain: "myapp"}, cfgWithHTTPAuth); blocked {
+		t.Fatalf("did not expect modern client to be blocked")
+	}
+}

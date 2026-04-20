@@ -79,6 +79,7 @@ type DomainMapping struct {
 	WSSocket       *websocket.Conn
 	TCPSocket      *net.Conn
 	ClientID       string
+	HTTPAuths      []client.HTTPTunnelAuth
 	Adapter        interface{} // protocol.ProtocolAdapter (using interface{} to avoid circular import)
 	UseNewProtocol bool
 }

@@ -17,6 +17,84 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func requiresModernClientForAdvancedFeatures(authVersion string, auth *client.Authentication, cfg *client.Config) (bool, string) {
+	if utils.IsVersionGreaterOrEqual(authVersion, "2.0.0") {
+		return false, ""
+	}
+	if cfg == nil {
+		return false, ""
+	}
+	if len(cfg.Tunnels) > 0 {
+		return true, "server tunnels require client >= 2.0.0"
+	}
+	if auth != nil && strings.EqualFold(strings.TrimSpace(auth.Type), "http") && len(resolveMatchedHTTPAuths(auth, cfg)) > 0 {
+		return true, "HTTP auth policy requires client >= 2.0.0"
+	}
+	return false, ""
+}
+
+func enabledHTTPAuthUsers(spec *client.TunnelSpec) []client.HTTPTunnelAuth {
+	if spec == nil {
+		return nil
+	}
+	if spec.Auth != nil {
+		if !spec.Auth.Enable || len(spec.Auth.Users) == 0 {
+			return nil
+		}
+		return append([]client.HTTPTunnelAuth(nil), spec.Auth.Users...)
+	}
+	// Backward compatibility for old schema.
+	if len(spec.Auths) > 0 {
+		return append([]client.HTTPTunnelAuth(nil), spec.Auths...)
+	}
+	return nil
+}
+
+func resolveMatchedHTTPAuths(auth *client.Authentication, config *client.Config) []client.HTTPTunnelAuth {
+	if auth == nil || config == nil || len(config.Tunnels) == 0 {
+		return nil
+	}
+
+	// Primary path: reuse established tunnel matching logic.
+	if idx := client.MatchTunnelSpecIndex(auth, config.Tunnels); idx >= 0 && idx < len(config.Tunnels) {
+		return enabledHTTPAuthUsers(&config.Tunnels[idx])
+	}
+
+	// Fallback 1: HTTP subdomain exact match (useful when primary tunnel preserves CLI upstream fields).
+	if strings.EqualFold(strings.TrimSpace(auth.Type), "http") && strings.TrimSpace(auth.SubDomain) != "" {
+		sub := strings.TrimSpace(auth.SubDomain)
+		for i := range config.Tunnels {
+			spec := config.Tunnels[i]
+			if !strings.EqualFold(strings.TrimSpace(spec.Type), "http") {
+				continue
+			}
+			if strings.TrimSpace(spec.SubDomain) == sub {
+				return enabledHTTPAuthUsers(&spec)
+			}
+		}
+	}
+
+	// Fallback 2: if only one HTTP tunnel declares auth policy, use it.
+	var only *client.TunnelSpec
+	for i := range config.Tunnels {
+		spec := &config.Tunnels[i]
+		if !strings.EqualFold(strings.TrimSpace(spec.Type), "http") {
+			continue
+		}
+		if len(enabledHTTPAuthUsers(spec)) == 0 {
+			continue
+		}
+		if only != nil {
+			return nil
+		}
+		only = spec
+	}
+	if only != nil {
+		return enabledHTTPAuthUsers(only)
+	}
+	return nil
+}
+
 // handleAuthenticate handles authentication
 func handleAuthenticate(
 	ctx *types.Context,
@@ -78,6 +156,11 @@ func handleAuthenticate(
 		sendAuthResponse(wsConn, options, false, fmt.Sprintf("invalid client: %v", err), "", nil)
 		return err
 	}
+	if blocked, reason := requiresModernClientForAdvancedFeatures(clientVersion, &auth, tokenRes.Config); blocked {
+		msg := fmt.Sprintf("client version(%s) is unsupported for this server configuration: %s", clientVersion, reason)
+		sendAuthResponse(wsConn, options, false, msg, "", nil)
+		return fmt.Errorf(msg)
+	}
 
 	// Primary connection uses client CLI as-is (no YAML overlay on auth). Tunnel list is for spawning other entries.
 	includeTunnelList := authType == types.AuthTypeCredentials && tokenRes.Config != nil &&
@@ -132,6 +215,10 @@ func handleAuthenticate(
 
 	// Create container
 	containerId := uuid.New().String()
+	matchedHTTPAuths := resolveMatchedHTTPAuths(&auth, tokenRes.Config)
+	if auth.Type == "http" && len(matchedHTTPAuths) == 0 {
+		logger.Infof("[monitor:ws][%s] no HTTP auths matched for current tunnel", clientId)
+	}
 
 	// Handle tunnel type
 	if auth.Type == "tcp" {
@@ -162,10 +249,10 @@ func handleAuthenticate(
 		wsConn.mu.RUnlock()
 
 		if domainContainer, ok := ctx.DomainMappings.(interface {
-			BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool) string
+			BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool, httpAuths []client.HTTPTunnelAuth) string
 		}); ok {
 			if auth.SubDomain == "" {
-				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, "", clientId, adapter, useNewProtocol)
+				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, "", clientId, adapter, useNewProtocol, matchedHTTPAuths)
 			} else {
 				logger.Infof("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
 
@@ -174,7 +261,7 @@ func handleAuthenticate(
 					return fmt.Errorf("subdomain already used")
 				}
 
-				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, auth.SubDomain, clientId, adapter, useNewProtocol)
+				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, auth.SubDomain, clientId, adapter, useNewProtocol, matchedHTTPAuths)
 			}
 		} else {
 			if auth.SubDomain == "" {

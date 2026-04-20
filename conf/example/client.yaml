@@ -1,5 +1,36 @@
 # Inlets Client Configuration Example
 #
+# Use with:
+#   inlets client -c ./conf/example/client.yaml
+#
+# You can still override any field from CLI flags/args.
+
+# Tunnel type: http | tcp
+type: http
+
+# Upstream target (port only or host:port)
+upstream: 127.0.0.1:9000
+
+# For http
+subDomain: myapp
+
+# For tcp (public tunnel port on server)
+# port: 20100
+
+# Authentication: use one of token or credentials
+credentials: client1:secret1
+# token: your-secret-token
+
+# Server endpoint
+remote: 127.0.0.1:8080
+remoteTCPPort: 8443
+
+# Runtime options
+healthcheckInterval: 30000
+# reportURL: https://example.com/report
+legacy: false
+# Inlets Client Configuration Example
+#
 # NOTE: Currently, the inlets client uses command-line arguments for configuration.
 # This file serves as a reference for available options and their usage.
 #

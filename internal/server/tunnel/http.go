@@ -114,6 +114,83 @@ func canSemanticStreamRequestBody(req *http.Request) bool {
 	return req.ContentLength >= 0
 }
 
+func hasConfiguredHTTPAuths(dm *types.DomainMapping) bool {
+	return dm != nil && len(dm.HTTPAuths) > 0
+}
+
+func matchesAuthorizationHeader(authHeader string, auth client.HTTPTunnelAuth) bool {
+	header := strings.TrimSpace(authHeader)
+	if header == "" {
+		return false
+	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parts[0]))
+	value := strings.TrimSpace(parts[1])
+
+	switch strings.ToLower(strings.TrimSpace(auth.Type)) {
+	case "basic":
+		if auth.Username == "" {
+			return false
+		}
+		expect := base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password))
+		return scheme == "basic" && value == expect
+	case "bearer":
+		token := strings.TrimSpace(auth.Token)
+		return scheme == "bearer" && token != "" && value == token
+	default:
+		return false
+	}
+}
+
+func isHTTPRequestAuthorized(req *http.Request, auths []client.HTTPTunnelAuth) bool {
+	if len(auths) == 0 {
+		return true
+	}
+	got := req.Header.Get("Authorization")
+	if strings.TrimSpace(got) == "" {
+		return false
+	}
+	for i := range auths {
+		if matchesAuthorizationHeader(got, auths[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeUnauthorized(tcpConn net.Conn, auths []client.HTTPTunnelAuth) {
+	msg := "Unauthorized"
+	hasBasic := false
+	hasBearer := false
+	for _, a := range auths {
+		switch strings.ToLower(strings.TrimSpace(a.Type)) {
+		case "basic":
+			hasBasic = true
+		case "bearer":
+			hasBearer = true
+		}
+	}
+
+	headers := []string{
+		"HTTP/1.1 401 Unauthorized",
+		"Content-Type: text/plain; charset=utf-8",
+		fmt.Sprintf("Content-Length: %d", len(msg)),
+		fmt.Sprintf("Date: %s", time.Now().UTC().Format(http.TimeFormat)),
+		"Connection: keep-alive",
+	}
+	if hasBasic {
+		headers = append(headers, `WWW-Authenticate: Basic realm="inlets"`)
+	}
+	if hasBearer {
+		headers = append(headers, "WWW-Authenticate: Bearer")
+	}
+	headers = append(headers, "", msg)
+	_, _ = tcpConn.Write([]byte(strings.Join(headers, "\r\n")))
+}
+
 func bodyStreamNegotiated(dm *types.DomainMapping) bool {
 	if dm == nil || !dm.UseNewProtocol || dm.Adapter == nil {
 		return false
@@ -161,6 +238,9 @@ func (t *HTTPTunnel) shouldStreamHTTPRequest(sc *socketConfig, req *http.Request
 		return false
 	}
 	dm := t.ctx.DomainMappings.Get(sc.subDomain)
+	if hasConfiguredHTTPAuths(dm) {
+		return false
+	}
 	return bodyStreamNegotiated(dm) && canSemanticStreamRequestBody(req)
 }
 
@@ -262,7 +342,7 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 
 		sub := t.subDomainFromRequest(r)
 		dm := t.ctx.DomainMappings.Get(sub)
-		useStream := dm != nil && bodyStreamNegotiated(dm) && canSemanticStreamRequestBody(r)
+		useStream := dm != nil && !hasConfiguredHTTPAuths(dm) && bodyStreamNegotiated(dm) && canSemanticStreamRequestBody(r)
 
 		var firstData string
 		if useStream {
@@ -448,6 +528,19 @@ func (t *HTTPTunnel) processRequestStream(tcpConn net.Conn, br *bufio.Reader, so
 		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
 		return fmt.Errorf("domain mapping not found")
+	}
+	if !isHTTPRequestAuthorized(req, domainMapping.HTTPAuths) {
+		logger.Infof("[401]%s", requestLog)
+		if contentLength > 0 {
+			if readBodyFromBR {
+				_, _ = io.CopyN(io.Discard, br, contentLength)
+			} else if req.Body != nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(req.Body, contentLength))
+				_ = req.Body.Close()
+			}
+		}
+		writeUnauthorized(tcpConn, domainMapping.HTTPAuths)
+		return nil
 	}
 
 	tcpConnPtr := &tcpConn
@@ -654,6 +747,11 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
 		return fmt.Errorf("domain mapping not found")
+	}
+	if !isHTTPRequestAuthorized(req, domainMapping.HTTPAuths) {
+		logger.Infof("[401]%s", requestLog)
+		writeUnauthorized(tcpConn, domainMapping.HTTPAuths)
+		return nil
 	}
 
 	// Bind TCP socket to domain mapping

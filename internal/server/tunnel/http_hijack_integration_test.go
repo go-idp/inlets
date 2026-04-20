@@ -189,13 +189,13 @@ func registerAppExampleMapping(t *testing.T, ctx *types.Context, adapter protoco
 	t.Helper()
 	// subdomain "app" for Host app.example.com with tunnel domain example.com
 	type binder interface {
-		BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool) string
+		BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool, httpAuths []client.HTTPTunnelAuth) string
 	}
 	b, ok := ctx.DomainMappings.(binder)
 	if !ok {
 		t.Fatal("DomainMappings implementation must expose BindWSWithMetadata")
 	}
-	b.BindWSWithMetadata(dummyWSSocket(), "app", "test-client", adapter, true)
+	b.BindWSWithMetadata(dummyWSSocket(), "app", "test-client", adapter, true, nil)
 }
 
 // TestHTTPTunnelHijackFirstRequestDoesNotBlock verifies the fix for reading the first tunneled

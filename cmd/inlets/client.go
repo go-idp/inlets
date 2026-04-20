@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-idp/inlets/internal/client"
 	"github.com/urfave/cli/v2"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -16,6 +17,57 @@ const (
 )
 
 var portOnlyRegex = regexp.MustCompile(`^\d+$`)
+
+type ClientFileConfig struct {
+	Type           string `yaml:"type"`
+	Upstream       string `yaml:"upstream"`
+	Port           int    `yaml:"port"`
+	SubDomain      string `yaml:"subDomain"`
+	Token          string `yaml:"token"`
+	Credentials    string `yaml:"credentials"`
+	Remote         string `yaml:"remote"`
+	RemoteTCPPort  int    `yaml:"remoteTCPPort"`
+	HealthcheckInt int    `yaml:"healthcheckInterval"`
+	ReportURL      string `yaml:"reportURL"`
+	Legacy         bool   `yaml:"legacy"`
+}
+
+func loadClientConfig(path string) (*ClientFileConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read client config file: %w", err)
+	}
+	var cfg ClientFileConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse client config file: %w", err)
+	}
+	return &cfg, nil
+}
+
+func parseUpstreamArg(upstreamArg string) (string, int, error) {
+	upstreamRegex := regexp.MustCompile(`^(\d+|.+:\d+)$`)
+	if !upstreamRegex.MatchString(upstreamArg) {
+		return "", 0, fmt.Errorf("upstream must be port or hostname:port, such as 9000 or 127.0.0.1:9000")
+	}
+
+	if portOnlyRegex.MatchString(upstreamArg) {
+		upstreamPort, err := strconv.Atoi(upstreamArg)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid port: %v", err)
+		}
+		return "127.0.0.1", upstreamPort, nil
+	}
+
+	parts := strings.Split(upstreamArg, ":")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("invalid upstream format")
+	}
+	upstreamPort, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port: %v", err)
+	}
+	return parts[0], upstreamPort, nil
+}
 
 func Client() *cli.Command {
 	return &cli.Command{
@@ -33,9 +85,20 @@ Examples:
   # TCP tunnel with credentials (flags before positional args)
   inlets client --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
 
+  # Server-managed tunnels only (no positional args)
+  inlets client --credentials clientId:clientSecret
+
+  # From config file
+  inlets client -c ./conf/example/client.yaml
+
 Note: Flags must be placed before positional arguments.`,
 		ArgsUsage: "[type] [upstream]",
 		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "config",
+				Aliases: []string{"c"},
+				Usage:   "Path to client config YAML file",
+			},
 			&cli.IntFlag{
 				Name:    "port",
 				Aliases: []string{"p"},
@@ -90,56 +153,108 @@ Note: Flags must be placed before positional arguments.`,
 			},
 		},
 		Action: func(c *cli.Context) error {
-			if c.NArg() < 2 {
+			if c.NArg() != 0 && c.NArg() != 2 {
 				return cli.ShowAppHelp(c)
 			}
 
-			tunnelType := c.Args().Get(0)
-			upstreamArg := c.Args().Get(1)
+			tunnelType := "http"
+			upstreamHost := "127.0.0.1"
+			upstreamPort := 80
+			port := 0
+			subDomain := ""
+			token := ""
+			credentials := ""
+			remote := "inlets.zcorky.com:443"
+			remoteTCPPort := 8443
+			healthcheckInt := 30000
+			reportURL := ""
+			legacy := false
 
-			// Get flags using urfave/cli/v2 standard way
-			port := c.Int("port")
-			subDomain := c.String("sub-domain")
-			token := c.String("token")
-			credentials := c.String("credentials")
-			remote := c.String("remote")
-			remoteTCPPort := c.Int("remote-tcp-port")
-			healthcheckInt := c.Int("healthcheck-interval")
-			reportURL := c.String("report-url")
-			legacy := c.Bool("legacy")
+			configPath := c.String("config")
+			if strings.TrimSpace(configPath) != "" {
+				cfg, err := loadClientConfig(configPath)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(cfg.Type) != "" {
+					tunnelType = strings.TrimSpace(cfg.Type)
+				}
+				if strings.TrimSpace(cfg.Upstream) != "" {
+					h, p, err := parseUpstreamArg(strings.TrimSpace(cfg.Upstream))
+					if err != nil {
+						return err
+					}
+					upstreamHost = h
+					upstreamPort = p
+				}
+				if cfg.Port > 0 {
+					port = cfg.Port
+				}
+				subDomain = strings.TrimSpace(cfg.SubDomain)
+				token = strings.TrimSpace(cfg.Token)
+				credentials = strings.TrimSpace(cfg.Credentials)
+				if strings.TrimSpace(cfg.Remote) != "" {
+					remote = strings.TrimSpace(cfg.Remote)
+				}
+				if cfg.RemoteTCPPort > 0 {
+					remoteTCPPort = cfg.RemoteTCPPort
+				}
+				if cfg.HealthcheckInt > 0 {
+					healthcheckInt = cfg.HealthcheckInt
+				}
+				reportURL = strings.TrimSpace(cfg.ReportURL)
+				legacy = cfg.Legacy
+			}
 
-			// Validate type
+			// Merge CLI flags (CLI has highest priority).
+			if c.IsSet("port") {
+				port = c.Int("port")
+			}
+			if c.IsSet("sub-domain") {
+				subDomain = c.String("sub-domain")
+			}
+			if c.IsSet("token") {
+				token = c.String("token")
+			}
+			if c.IsSet("credentials") {
+				credentials = c.String("credentials")
+			}
+			if c.IsSet("remote") {
+				remote = c.String("remote")
+			}
+			if c.IsSet("remote-tcp-port") {
+				remoteTCPPort = c.Int("remote-tcp-port")
+			}
+			if c.IsSet("healthcheck-interval") {
+				healthcheckInt = c.Int("healthcheck-interval")
+			}
+			if c.IsSet("report-url") {
+				reportURL = c.String("report-url")
+			}
+			if c.IsSet("legacy") {
+				legacy = c.Bool("legacy")
+			}
+
+			if c.NArg() == 2 {
+				tunnelType = c.Args().Get(0)
+				upstreamArg := c.Args().Get(1)
+
+				// Validate type
+				if tunnelType != "http" && tunnelType != "tcp" {
+					return fmt.Errorf("type must be 'http' or 'tcp'")
+				}
+
+				var err error
+				upstreamHost, upstreamPort, err = parseUpstreamArg(upstreamArg)
+				if err != nil {
+					return err
+				}
+			} else if strings.TrimSpace(credentials) == "" {
+				return fmt.Errorf("when type/upstream is omitted, --credentials is required to use server-managed tunnels")
+			}
+
 			if tunnelType != "http" && tunnelType != "tcp" {
 				return fmt.Errorf("type must be 'http' or 'tcp'")
-			}
-
-			// Validate upstream
-			upstreamRegex := regexp.MustCompile(`^(\d+|.+:\d+)$`)
-			if !upstreamRegex.MatchString(upstreamArg) {
-				return fmt.Errorf("upstream must be port or hostname:port, such as 9000 or 127.0.0.1:9000")
-			}
-
-			// Parse upstream
-			var upstreamHost string
-			var upstreamPort int
-			var err error
-
-			if portOnlyRegex.MatchString(upstreamArg) {
-				upstreamPort, err = strconv.Atoi(upstreamArg)
-				if err != nil {
-					return fmt.Errorf("invalid port: %v", err)
-				}
-				upstreamHost = "127.0.0.1"
-			} else {
-				parts := strings.Split(upstreamArg, ":")
-				if len(parts) != 2 {
-					return fmt.Errorf("invalid upstream format")
-				}
-				upstreamHost = parts[0]
-				upstreamPort, err = strconv.Atoi(parts[1])
-				if err != nil {
-					return fmt.Errorf("invalid port: %v", err)
-				}
 			}
 
 			// Determine auth type

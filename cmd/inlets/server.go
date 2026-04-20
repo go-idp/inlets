@@ -15,9 +15,9 @@ import (
 
 	"github.com/go-idp/inlets/internal/client"
 	"github.com/go-idp/inlets/internal/server"
-	"github.com/go-zoox/logger"
 	"github.com/go-idp/inlets/internal/server/limiter"
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-zoox/logger"
 	"github.com/urfave/cli/v2"
 )
 
@@ -385,6 +385,42 @@ func loadConfigFile(path string) (*ServerConfig, error) {
 	return &config, nil
 }
 
+func collectHTTPAuthTunnels(clients []ClientConfig) []client.TunnelSpec {
+	if len(clients) == 0 {
+		return nil
+	}
+	var out []client.TunnelSpec
+	for i := range clients {
+		for j := range clients[i].Tunnels {
+			t := clients[i].Tunnels[j]
+			if !strings.EqualFold(strings.TrimSpace(t.Type), "http") {
+				continue
+			}
+			hasAuth := (t.Auth != nil && t.Auth.Enable && len(t.Auth.Users) > 0) || len(t.Auths) > 0
+			if !hasAuth {
+				continue
+			}
+			cp := t
+			if t.Auth != nil {
+				authCopy := *t.Auth
+				if len(t.Auth.Users) > 0 {
+					users := make([]client.HTTPTunnelAuth, len(t.Auth.Users))
+					copy(users, t.Auth.Users)
+					authCopy.Users = users
+				}
+				cp.Auth = &authCopy
+			}
+			if len(t.Auths) > 0 {
+				auths := make([]client.HTTPTunnelAuth, len(t.Auths))
+				copy(auths, t.Auths)
+				cp.Auths = auths
+			}
+			out = append(out, cp)
+		}
+	}
+	return out
+}
+
 // createGetTokenFunctionWithRef creates a GetToken function that uses a config reference for dynamic updates
 func createGetTokenFunctionWithRef(configRef *struct {
 	mu     sync.RWMutex
@@ -432,7 +468,7 @@ func createGetTokenFunctionWithRef(configRef *struct {
 							Version: ServerVersion,
 						}
 					}
-					if len(clientCfg.Tunnels) > 0 && (options == nil || !options.OpaqueChild) {
+					if len(clientCfg.Tunnels) > 0 {
 						tunnelsCopy := make([]client.TunnelSpec, len(clientCfg.Tunnels))
 						copy(tunnelsCopy, clientCfg.Tunnels)
 						clientConfig.Tunnels = tunnelsCopy
@@ -459,6 +495,7 @@ func createGetTokenFunctionWithRef(configRef *struct {
 			Token:    configToken,
 			Config: &client.Config{
 				Version: ServerVersion,
+				Tunnels: collectHTTPAuthTunnels(configFile.Clients),
 			},
 		}, nil
 	}

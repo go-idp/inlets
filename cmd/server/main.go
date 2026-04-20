@@ -16,9 +16,9 @@ import (
 
 	"github.com/go-idp/inlets/internal/client"
 	"github.com/go-idp/inlets/internal/server"
-	"github.com/go-zoox/logger"
 	"github.com/go-idp/inlets/internal/server/limiter"
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-zoox/logger"
 )
 
 const (
@@ -26,15 +26,15 @@ const (
 )
 
 var (
-	serverPort             int
-	serverTCPPort          int
-	serverDomain           string
-	serverToken            string
-	serverSecure           bool
-	serverSecureFromCLI    bool
-	notificationProvider   string
-	notificationURL        string
-	configPath             string
+	serverPort           int
+	serverTCPPort        int
+	serverDomain         string
+	serverToken          string
+	serverSecure         bool
+	serverSecureFromCLI  bool
+	notificationProvider string
+	notificationURL      string
+	configPath           string
 )
 
 // ServerConfig represents the server configuration from YAML file
@@ -64,7 +64,7 @@ type BandwidthLimitsConfig struct {
 	Clients map[string]*limiter.BandwidthLimit `yaml:"clients"`
 }
 
-func tokenResponseForCredentialsClient(cli *ClientConfig, includeTunnels bool) (*types.TokenResponse, error) {
+func tokenResponseForCredentialsClient(cli *ClientConfig) (*types.TokenResponse, error) {
 	var clientConfig *client.Config
 	if cli.Config != nil {
 		clientConfig = &client.Config{
@@ -78,7 +78,7 @@ func tokenResponseForCredentialsClient(cli *ClientConfig, includeTunnels bool) (
 	} else {
 		clientConfig = &client.Config{Version: ServerVersion}
 	}
-	if includeTunnels && len(cli.Tunnels) > 0 {
+	if len(cli.Tunnels) > 0 {
 		t := make([]client.TunnelSpec, len(cli.Tunnels))
 		copy(t, cli.Tunnels)
 		clientConfig.Tunnels = t
@@ -88,6 +88,42 @@ func tokenResponseForCredentialsClient(cli *ClientConfig, includeTunnels bool) (
 		Token:    cli.ClientSecret,
 		Config:   clientConfig,
 	}, nil
+}
+
+func collectHTTPAuthTunnels(clients []ClientConfig) []client.TunnelSpec {
+	if len(clients) == 0 {
+		return nil
+	}
+	var out []client.TunnelSpec
+	for i := range clients {
+		for j := range clients[i].Tunnels {
+			t := clients[i].Tunnels[j]
+			if !strings.EqualFold(strings.TrimSpace(t.Type), "http") {
+				continue
+			}
+			hasAuth := (t.Auth != nil && t.Auth.Enable && len(t.Auth.Users) > 0) || len(t.Auths) > 0
+			if !hasAuth {
+				continue
+			}
+			cp := t
+			if t.Auth != nil {
+				authCopy := *t.Auth
+				if len(t.Auth.Users) > 0 {
+					users := make([]client.HTTPTunnelAuth, len(t.Auth.Users))
+					copy(users, t.Auth.Users)
+					authCopy.Users = users
+				}
+				cp.Auth = &authCopy
+			}
+			if len(t.Auths) > 0 {
+				auths := make([]client.HTTPTunnelAuth, len(t.Auths))
+				copy(auths, t.Auths)
+				cp.Auths = auths
+			}
+			out = append(out, cp)
+		}
+	}
+	return out
 }
 
 func main() {
@@ -446,7 +482,7 @@ func createGetTokenFunction(token string, configFile *ServerConfig) types.GetTok
 				for i := range configFile.Clients {
 					cli := &configFile.Clients[i]
 					if cli.ClientID == clientId {
-						return tokenResponseForCredentialsClient(cli, options == nil || !options.OpaqueChild)
+						return tokenResponseForCredentialsClient(cli)
 					}
 				}
 				return nil, fmt.Errorf("client not found: %s", clientId)
@@ -465,12 +501,17 @@ func createGetTokenFunction(token string, configFile *ServerConfig) types.GetTok
 		if token == "" {
 			return nil, fmt.Errorf("token is required for token authentication")
 		}
+		var authTunnels []client.TunnelSpec
+		if configFile != nil {
+			authTunnels = collectHTTPAuthTunnels(configFile.Clients)
+		}
 
 		return &types.TokenResponse{
 			AuthType: types.AuthTypeToken,
 			Token:    token,
 			Config: &client.Config{
 				Version: ServerVersion,
+				Tunnels: authTunnels,
 			},
 		}, nil
 	}
@@ -505,7 +546,7 @@ func createGetTokenFunctionWithRef(token string, configRef *struct {
 				for i := range configFile.Clients {
 					cli := &configFile.Clients[i]
 					if cli.ClientID == clientId {
-						return tokenResponseForCredentialsClient(cli, options == nil || !options.OpaqueChild)
+						return tokenResponseForCredentialsClient(cli)
 					}
 				}
 				return nil, fmt.Errorf("client not found: %s", clientId)
@@ -529,12 +570,17 @@ func createGetTokenFunctionWithRef(token string, configRef *struct {
 		if configToken == "" {
 			return nil, fmt.Errorf("token is required for token authentication")
 		}
+		var authTunnels []client.TunnelSpec
+		if configFile != nil {
+			authTunnels = collectHTTPAuthTunnels(configFile.Clients)
+		}
 
 		return &types.TokenResponse{
 			AuthType: types.AuthTypeToken,
 			Token:    configToken,
 			Config: &client.Config{
 				Version: ServerVersion,
+				Tunnels: authTunnels,
 			},
 		}, nil
 	}

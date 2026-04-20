@@ -52,6 +52,15 @@ clients:
         type: http
         upstream: 127.0.0.1:9000
         subDomain: myapp
+        # Optional: Authorization rules checked at the server before forwarding to the client tunnel.
+        auth:
+          enable: true
+          users:
+            - type: bearer
+              token: "service-token"
+            - type: basic
+              username: u
+              password: p
       - name: tcp
         type: tcp
         upstream: 127.0.0.1:9000
