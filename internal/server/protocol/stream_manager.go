@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -27,25 +28,30 @@ type StreamChunk struct {
 
 // Stream represents a data stream
 type Stream struct {
-	ID              string
-	State           StreamState
-	Chunks          map[uint32]*StreamChunk
+	ID               string
+	State            StreamState
+	Chunks           map[uint32]*StreamChunk
 	ExpectedSequence uint32
-	TotalChunks     int
-	OnComplete      func(data []byte)
-	OnError         func(error error)
-	CompletedData   []byte
-	mu              sync.Mutex
+	TotalChunks      int
+	OnComplete       func(data []byte)
+	OnError          func(error error)
+	CompletedData    []byte
+	createdAt        time.Time
+	lastActivity     time.Time
+	mu               sync.Mutex
 }
 
 // NewStream creates a new stream
 func NewStream(id string) *Stream {
+	now := time.Now()
 	return &Stream{
-		ID:              id,
-		State:           StreamStateInitializing,
-		Chunks:          make(map[uint32]*StreamChunk),
+		ID:               id,
+		State:            StreamStateInitializing,
+		Chunks:           make(map[uint32]*StreamChunk),
 		ExpectedSequence: 0,
-		TotalChunks:     -1, // -1 means unknown
+		TotalChunks:      -1, // -1 means unknown
+		createdAt:        now,
+		lastActivity:     now,
 	}
 }
 
@@ -57,6 +63,8 @@ func (s *Stream) AddChunk(sequence uint32, data []byte, isLast bool) {
 	if s.State == StreamStateCompleted || s.State == StreamStateError {
 		return // Stream is completed or errored, ignore new data
 	}
+
+	s.lastActivity = time.Now()
 
 	s.Chunks[sequence] = &StreamChunk{
 		Sequence: sequence,
@@ -151,19 +159,22 @@ func (s *Stream) Destroy() {
 
 // StreamManager manages multiple data streams
 type StreamManager struct {
-	streams        map[string]*Stream
+	streams          map[string]*Stream
 	defaultChunkSize int
 	maxStreamAge     time.Duration
-	mu              sync.RWMutex
-	stopCleanup     chan struct{}
+	// stallTimeout: if no chunk arrives for this long while reassembly is incomplete, evict the stream.
+	stallTimeout time.Duration
+	mu           sync.RWMutex
+	stopCleanup  chan struct{}
 }
 
 // NewStreamManager creates a new stream manager
 func NewStreamManager(defaultChunkSize int) *StreamManager {
 	sm := &StreamManager{
-		streams:         make(map[string]*Stream),
+		streams:          make(map[string]*Stream),
 		defaultChunkSize: defaultChunkSize,
 		maxStreamAge:     5 * time.Minute,
+		stallTimeout:     2 * time.Minute,
 		stopCleanup:      make(chan struct{}),
 	}
 
@@ -275,22 +286,50 @@ func (sm *StreamManager) cleanupLoop() {
 	}
 }
 
-// cleanup removes expired streams
+// cleanup removes completed streams and evicts stalled partial reassemblies.
 func (sm *StreamManager) cleanup() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	streamsToRemove := make([]string, 0)
-
-	for streamId, stream := range sm.streams {
-		// Remove completed or errored streams
-		if stream.State == StreamStateCompleted || stream.State == StreamStateError {
-			streamsToRemove = append(streamsToRemove, streamId)
-		}
+	now := time.Now()
+	stall := sm.stallTimeout
+	if stall <= 0 {
+		stall = 2 * time.Minute
 	}
 
-	for _, streamId := range streamsToRemove {
-		sm.RemoveStream(streamId)
+	sm.mu.Lock()
+	ids := make([]string, 0, len(sm.streams))
+	for id := range sm.streams {
+		ids = append(ids, id)
+	}
+	sm.mu.Unlock()
+
+	for _, streamId := range ids {
+		var errCb func(error)
+		shouldRemove := false
+
+		sm.mu.RLock()
+		stream := sm.streams[streamId]
+		sm.mu.RUnlock()
+		if stream == nil {
+			continue
+		}
+
+		stream.mu.Lock()
+		state := stream.State
+		completedOrErr := state == StreamStateCompleted || state == StreamStateError
+		stale := !completedOrErr &&
+			(now.Sub(stream.lastActivity) > stall || now.Sub(stream.createdAt) > sm.maxStreamAge)
+		if stale {
+			errCb = stream.OnError
+			stream.State = StreamStateError
+		}
+		shouldRemove = completedOrErr || stale
+		stream.mu.Unlock()
+
+		if errCb != nil {
+			errCb(fmt.Errorf("stream %s: reassembly stalled or exceeded max age", streamId))
+		}
+		if shouldRemove {
+			sm.RemoveStream(streamId)
+		}
 	}
 }
 

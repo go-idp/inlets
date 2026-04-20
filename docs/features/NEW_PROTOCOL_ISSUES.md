@@ -4,7 +4,7 @@
 
 ## 最新修复状态（2026-04-20）
 
-以下与 **`NEW_PROTOCOL_ISSUES` 概览表中 🔴 高优先级** 相关的项已处理或澄清：
+以下与 **`NEW_PROTOCOL_ISSUES` 概览表中 🔴 高优先级及原 🟡 数据通道/流重组** 相关的项已处理或澄清：
 
 1. **流式传输缺少 onComplete / AddChunk 自动创建（已修复）**
    - **根因**：`StreamManager.AddChunk` 在流不存在时调用 `CreateStream`，持锁重入导致 **死锁**，且 `onComplete` 为 nil 时重组完成无法投递。
@@ -16,6 +16,15 @@
 
 3. **流控 Send 竞态（已缓解）**
    - 发送路径已使用 **`TrySend` 原子扣减窗口**（见 `sendStreaming` / `sendStreamingViaDataChannel`）；`Send` 委托 `TrySend`。`CanSend` 仅保留只读语义，**发送侧勿用 `CanSend` + `Send` 组合**。
+
+4. **数据通道断开与流清理（已对齐）**
+   - `defer` 中通过 **`RemoveDataChannelForStream`** 清理每流 data WS 时，适配器内已 **`RemoveStream`（流管理器）+ 流控窗口**（见 `binary.go`）。`handleConnection` 的 defer 改为 **`Get(containerId)` 取最新映射** 再删 map / 调 `RemoveDataChannelForStream`，避免陈旧 `*TunnelMapping` 指针。
+
+5. **数据通道 Upgrade 前后竞态（已修复）**
+   - **`Upgrade` 成功后再次 `Get` container 并校验 `ClientId`**；若隧道已销毁则关闭连接，避免向已释放映射注册 `DataSockets`。
+
+6. **流重组长期卡住（已缓解）**
+   - 为 **`Stream` 记录 `createdAt` / `lastActivity`**（每次 `AddChunk` 更新）；`StreamManager.cleanup` 周期性驱逐 **超过 `stallTimeout`（默认 2m）无新 chunk** 或 **超过 `maxStreamAge`（默认 5m）** 的非完成流，并可选调用 **`OnError`** 后 `RemoveStream`。
 
 ---
 
@@ -52,9 +61,8 @@
 | 🟢 已澄清 | 流式传输序列号（按 streamId 隔离） | `protocol/binary.go` | 见 2026-04-20 节 |
 | 🟢 已修复 | 流式传输 EnsureStream / 禁止 nil onComplete | `protocol/stream_manager.go` | 见 2026-04-20 节 |
 | 🟢 已缓解 | 流控发送路径统一 TrySend | `protocol/flow_controller.go` | 见 2026-04-20 节 |
-| 🟡 中 | 流控窗口未正确清理 | `channels/data/new.go` | 资源泄漏 |
-| 🟡 中 | 数据通道验证竞态条件 | `channels/data/new.go` | 稳定性问题 |
-| 🟡 中 | 流式传输流重组失败处理 | `protocol/stream_manager.go` | 健壮性问题 |
+| 🟢 已缓解 | 数据通道断开清理（defer + RemoveDataChannelForStream） | `channels/data/new.go` | 见 2026-04-20 节第 4–5 点 |
+| 🟢 已缓解 | 流重组停滞驱逐（stall / max age） | `protocol/stream_manager.go` | 见第 6 点 |
 | 🟢 低 | 错误处理不完整 | 多处 | 可维护性 |
 | 🟢 低 | 忙等待优化 | `protocol/binary.go` | 性能问题 |
 

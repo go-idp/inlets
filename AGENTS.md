@@ -296,3 +296,17 @@ go func() {
 - `internal/server/protocol/stream_manager.go`、`stream_manager_test.go`
 - `internal/server/protocol/binary.go`、`flow_controller.go`
 - `docs/features/NEW_PROTOCOL_ISSUES.md`
+
+## 2026-04-20: 数据通道竞态与流重组停滞驱逐
+
+### 做法
+
+1. **Upgrade 后二次校验**：`/_/data` 在 `Upgrade` 成功后再次 `Container.Get` 并比对 `ClientId`；失败则关连接，避免隧道已销毁仍注册 `DataSockets`。
+2. **defer 用最新映射**：数据通道 `handleConnection` 退出时用 **`Get(containerId)`** 清理 `DataSockets` / `DataWriteMu` 并调用 **`RemoveDataChannelForStream`**（内部已清流管理器与流控窗口），避免闭包捕获的 `container` 指针过期。
+3. **流停滞驱逐**：`Stream` 增加 **`createdAt` / `lastActivity`**；`StreamManager.cleanup` 驱逐超过 **`stallTimeout`（默认 2m）** 无新 chunk 或超过 **`maxStreamAge`（默认 5m）** 的未完成流，调用 **`OnError`** 后 **`RemoveStream`**。
+
+### 相关文件
+
+- `internal/server/channels/data/new.go`
+- `internal/server/protocol/stream_manager.go`、`stream_manager_test.go`
+- `docs/features/NEW_PROTOCOL_ISSUES.md`

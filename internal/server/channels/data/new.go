@@ -63,6 +63,19 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 		return
 	}
 
+	// Re-validate tunnel after upgrade: monitor may have torn down the container during handshake.
+	container = h.ctx.Container.Get(containerId)
+	if container == nil {
+		logger.Infof("[monitor:ws:data] Container gone after upgrade: %s", containerId)
+		conn.Close()
+		return
+	}
+	if container.ClientId != clientId {
+		logger.Infof("[monitor:ws:data] ClientId mismatch after upgrade: expected %s, got %s", container.ClientId, clientId)
+		conn.Close()
+		return
+	}
+
 	logger.Infof("[monitor:ws:data] New data channel connection: clientId=%s, containerId=%s, streamId=%s", clientId, containerId, streamId)
 
 	// Store data channel connection in container (per stream)
@@ -74,7 +87,7 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 		container.DataMu.Unlock()
 	}
 
-	// Set data channel in adapter if using new protocol
+	// Set data channel in adapter if using new protocol (RemoveDataChannelForStream clears flow + stream manager)
 	if container.UseNewProtocol && container.Adapter != nil {
 		if binaryAdapter, ok := container.Adapter.(interface {
 			SetDataChannelForStream(streamId string, dataConn *websocket.Conn, dataWriteMu *sync.Mutex)
@@ -97,20 +110,22 @@ func (h *WebSocketDataChannelHandler) HandleConnection(w http.ResponseWriter, r 
 func (h *WebSocketDataChannelHandler) handleConnection(conn *websocket.Conn, containerId, streamId string, container *types.TunnelMapping) {
 	defer func() {
 		logger.Infof("[monitor:ws:data] Data channel disconnected for container: %s streamId: %s", containerId, streamId)
-		if container.DataMu != nil {
-			container.DataMu.Lock()
-			delete(container.DataSockets, streamId)
-			delete(container.DataWriteMu, streamId)
-			container.DataMu.Unlock()
+		// Always resolve latest mapping so cleanup runs if the tunnel still exists (avoids stale pointer after destroy).
+		c := h.ctx.Container.Get(containerId)
+		if c != nil && c.DataMu != nil {
+			c.DataMu.Lock()
+			delete(c.DataSockets, streamId)
+			delete(c.DataWriteMu, streamId)
+			c.DataMu.Unlock()
 		}
-		if container.UseNewProtocol && container.Adapter != nil {
-			if binaryAdapter, ok := container.Adapter.(interface {
+		if c != nil && c.UseNewProtocol && c.Adapter != nil {
+			if binaryAdapter, ok := c.Adapter.(interface {
 				RemoveDataChannelForStream(streamId string)
 			}); ok {
 				binaryAdapter.RemoveDataChannelForStream(streamId)
 			}
 		}
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	logger.Infof("[monitor:ws:data] Starting data channel message loop for container: %s", containerId)

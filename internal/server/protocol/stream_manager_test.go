@@ -3,6 +3,7 @@ package protocol
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestStreamManagerAddChunkWithoutStreamDoesNotDeadlock(t *testing.T) {
@@ -40,6 +41,32 @@ func TestStreamManagerEnsureStreamThenAddChunkReassembles(t *testing.T) {
 	wg.Wait()
 	if string(got) != "hello" {
 		t.Fatalf("reassembled %q want hello", got)
+	}
+}
+
+func TestStreamManagerCleanupEvictsStall(t *testing.T) {
+	sm := &StreamManager{
+		streams:          make(map[string]*Stream),
+		defaultChunkSize: 1024,
+		maxStreamAge:     time.Hour,
+		stallTimeout:     50 * time.Millisecond,
+		stopCleanup:      make(chan struct{}),
+	}
+	s := NewStream("stale")
+	s.State = StreamStateActive
+	s.lastActivity = time.Now().Add(-time.Hour)
+	s.createdAt = time.Now().Add(-time.Hour)
+	sm.streams["stale"] = s
+
+	var errSeen error
+	s.OnError = func(e error) { errSeen = e }
+
+	sm.cleanup()
+	if sm.GetStream("stale") != nil {
+		t.Fatal("stale stream should be removed")
+	}
+	if errSeen == nil {
+		t.Fatal("expected OnError on eviction")
 	}
 }
 
