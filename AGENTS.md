@@ -310,3 +310,17 @@ go func() {
 - `internal/server/channels/data/new.go`
 - `internal/server/protocol/stream_manager.go`、`stream_manager_test.go`
 - `docs/features/NEW_PROTOCOL_ISSUES.md`
+
+## 2026-04-20: 监控通道可观测性与流控退避
+
+### 做法
+
+1. **认证前 binary**：`/_/monitor` 在 **`isAuthenticated == false`** 时若收到 **binary** 帧，**每条连接只打一条** 说明性日志，提示先完成文本 **`authenticate`**。
+2. **`request` 路径**：注释写明新协议下 **HTTP 仍走监控通道** 的 `request`+base64 载荷，**TCP 数据** 走 **`/_/data`**，避免与「全部走 data」混淆。
+3. **流控发送等待**：`BinaryProtocolAdapter.waitFlowSendSlot` 使用 **5ms→100ms  capped 指数退避** 替代固定 50ms 忙等。
+
+### 相关文件
+
+- `internal/server/channels/monitor/new.go`
+- `internal/server/protocol/binary.go`
+- `docs/features/NEW_PROTOCOL_ISSUES.md`

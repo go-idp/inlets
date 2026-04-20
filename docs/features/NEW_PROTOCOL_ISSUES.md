@@ -26,6 +26,18 @@
 6. **流重组长期卡住（已缓解）**
    - 为 **`Stream` 记录 `createdAt` / `lastActivity`**（每次 `AddChunk` 更新）；`StreamManager.cleanup` 周期性驱逐 **超过 `stallTimeout`（默认 2m）无新 chunk** 或 **超过 `maxStreamAge`（默认 5m）** 的非完成流，并可选调用 **`OnError`** 后 `RemoveStream`。
 
+7. **监控通道认证前二进制帧（已改进）**
+   - 未认证时收到 **binary** 帧：每条连接 **最多记录一次** 英文日志，提示需先完成 **文本 `authenticate`**，避免静默丢弃难排查。
+
+8. **监控通道 `request` 与数据通道职责（已澄清）**
+   - 代码注释明确：**HTTP 隧道** 在新协议下仍通过监控通道 **`["request", …]` + base64 二进制**；**TCP 大流量** 走 **`/_/data`**。属设计取舍，非遗漏。
+
+9. **流控读锁升级（文档过时）**
+   - 当前 `FlowController.Receive` / **`TrySend`** 在单把 **`Lock`/`Unlock`** 内完成初始化与更新，**无** 旧文档中的 `RUnlock`→`InitializeStream`→`RLock` 路径；若再出现类似模式应禁止。
+
+10. **流控发送忙等（已优化）**
+    - `sendStreaming` / `sendStreamingViaDataChannel` 中等待窗口由 **固定 50ms sleep** 改为 **`waitFlowSendSlot`**：**5ms 起、上限 100ms 的指数退避**，减轻窗口长时间满载时的定时器唤醒频率。
+
 ---
 
 ## 最新修复状态（2026-03-15）
@@ -63,8 +75,11 @@
 | 🟢 已缓解 | 流控发送路径统一 TrySend | `protocol/flow_controller.go` | 见 2026-04-20 节 |
 | 🟢 已缓解 | 数据通道断开清理（defer + RemoveDataChannelForStream） | `channels/data/new.go` | 见 2026-04-20 节第 4–5 点 |
 | 🟢 已缓解 | 流重组停滞驱逐（stall / max age） | `protocol/stream_manager.go` | 见第 6 点 |
-| 🟢 低 | 错误处理不完整 | 多处 | 可维护性 |
-| 🟢 低 | 忙等待优化 | `protocol/binary.go` | 性能问题 |
+| 🟢 已改进 | 认证前 binary 静默丢弃 | `channels/monitor/new.go` | 见第 7 点 |
+| 🟢 已澄清 | HTTP `request` 走监控通道 | `channels/monitor/new.go` | 见第 8 点 |
+| 🟢 文档过时 | 流控 RUnlock 升级 | `flow_controller.go` | 见第 9 点 |
+| 🟢 已优化 | 流控发送退避 | `protocol/binary.go` | 见第 10 点 |
+| 🟢 低 | 错误处理不完整 | 多处 | 可维护性（未收口） |
 
 ---
 

@@ -54,6 +54,7 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 		defer authTimeout.Stop()
 
 		logger.Infof("[monitor:ws] Starting message reading loop for %s", conn.RemoteAddr())
+		preAuthBinaryLogged := false
 		for {
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
@@ -95,6 +96,11 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 						}); ok {
 							binaryAdapter.HandleBinaryMessage(message)
 						}
+					}
+				} else {
+					if !preAuthBinaryLogged {
+						preAuthBinaryLogged = true
+						logger.Infof("[monitor:ws] ignoring binary frame (%d bytes) before authentication; complete text authenticate first", len(message))
 					}
 				}
 			} else if messageType == websocket.TextMessage {
@@ -142,7 +148,9 @@ func (h *MonitorChannelHandler) HandleConnection(w http.ResponseWriter, r *http.
 						handleResponse(h.ctx, wsConn, payload)
 					}
 				case "request":
-					// Handle HTTP request (base64-encoded binary for new protocol)
+					// HTTP tunnel (new protocol): requests are Text JSON ["request",{id,data}] with
+					// base64-wrapped binary payloads on the monitor channel by design. TCP tunnel
+					// bulk data uses per-stream WebSocket on /_/data instead.
 					if isAuthenticated {
 						wsConn.mu.RLock()
 						adapter := wsConn.Adapter

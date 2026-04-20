@@ -325,6 +325,25 @@ func (a *BinaryProtocolAdapter) getNextSequence(streamId string) uint32 {
 	return next
 }
 
+// waitFlowSendSlot blocks until flow-control TrySend admits chunkLen bytes for streamId.
+// Uses capped exponential backoff (5ms .. 100ms) instead of a fixed 50ms sleep.
+func (a *BinaryProtocolAdapter) waitFlowSendSlot(streamId string, chunkLen int) {
+	if a.flowController == nil {
+		return
+	}
+	backoff := 5 * time.Millisecond
+	const maxBackoff = 100 * time.Millisecond
+	for !a.flowController.TrySend(streamId, chunkLen) {
+		time.Sleep(backoff)
+		next := backoff * 2
+		if next > maxBackoff {
+			backoff = maxBackoff
+		} else {
+			backoff = next
+		}
+	}
+}
+
 // handleBackpressure handles backpressure signals
 func (a *BinaryProtocolAdapter) handleBackpressure(streamId string, pause bool) {
 	if a.streamManager != nil {
@@ -891,10 +910,7 @@ func (a *BinaryProtocolAdapter) sendStreamingViaDataChannel(msgType MessageType,
 
 		// Check flow control (atomic check-and-update)
 		if a.flowController != nil {
-			// Wait for window to be available using atomic TrySend
-			for !a.flowController.TrySend(streamId, len(chunk)) {
-				time.Sleep(50 * time.Millisecond)
-			}
+			a.waitFlowSendSlot(streamId, len(chunk))
 		}
 
 		// Build message with sequential numbering starting from 0
@@ -973,10 +989,7 @@ func (a *BinaryProtocolAdapter) sendStreaming(msgType MessageType, streamId stri
 
 		// Check flow control (atomic check-and-update)
 		if a.flowController != nil {
-			// Wait for window to be available using atomic TrySend
-			for !a.flowController.TrySend(streamId, len(chunk)) {
-				time.Sleep(50 * time.Millisecond)
-			}
+			a.waitFlowSendSlot(streamId, len(chunk))
 		}
 
 		// Build message with sequential numbering starting from 0
