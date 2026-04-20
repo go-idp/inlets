@@ -2,6 +2,23 @@
 
 本文档记录了 inlets go server 新协议（v2 / 2.0.0）实现中存在的问题。
 
+## 最新修复状态（2026-04-20）
+
+以下与 **`NEW_PROTOCOL_ISSUES` 概览表中 🔴 高优先级** 相关的项已处理或澄清：
+
+1. **流式传输缺少 onComplete / AddChunk 自动创建（已修复）**
+   - **根因**：`StreamManager.AddChunk` 在流不存在时调用 `CreateStream`，持锁重入导致 **死锁**，且 `onComplete` 为 nil 时重组完成无法投递。
+   - **修复**：去掉自动创建；新增 **`EnsureStream`**（幂等、先注册回调再收 chunk）；`handleBinaryMessage` 在流式路径上若缺少 handler 则 **返回错误**，不再创建空流；无 TCP handler 的流式 TCP 直接报错。
+   - **相关代码**：`internal/server/protocol/stream_manager.go`、`internal/server/protocol/binary.go`；测试：`stream_manager_test.go`。
+
+2. **流式传输序列号（澄清，非缺陷）**
+   - 分片发送使用 **每个逻辑流 `streamId` 下从 0 递增的 chunk 序号**；不同请求/流使用不同 `streamId`，与 `StreamManager` 按 `streamId` 隔离的重组一致，**不存在跨流序号冲突**。
+
+3. **流控 Send 竞态（已缓解）**
+   - 发送路径已使用 **`TrySend` 原子扣减窗口**（见 `sendStreaming` / `sendStreamingViaDataChannel`）；`Send` 委托 `TrySend`。`CanSend` 仅保留只读语义，**发送侧勿用 `CanSend` + `Send` 组合**。
+
+---
+
 ## 最新修复状态（2026-03-15）
 
 以下与“高并发下 HTTPS 请求 pending”直接相关的问题已修复：
@@ -32,9 +49,9 @@
 
 | 优先级 | 问题 | 位置 | 影响 |
 |--------|------|------|------|
-| 🔴 高 | 流式传输序列号不一致 | `protocol/binary.go` | 可能导致数据丢失 |
-| 🔴 高 | 流式传输缺少 onComplete 回调 | `protocol/stream_manager.go` | 功能不完整 |
-| 🔴 高 | 流控窗口竞态条件 | `protocol/flow_controller.go` | 可能导致数据损坏 |
+| 🟢 已澄清 | 流式传输序列号（按 streamId 隔离） | `protocol/binary.go` | 见 2026-04-20 节 |
+| 🟢 已修复 | 流式传输 EnsureStream / 禁止 nil onComplete | `protocol/stream_manager.go` | 见 2026-04-20 节 |
+| 🟢 已缓解 | 流控发送路径统一 TrySend | `protocol/flow_controller.go` | 见 2026-04-20 节 |
 | 🟡 中 | 流控窗口未正确清理 | `channels/data/new.go` | 资源泄漏 |
 | 🟡 中 | 数据通道验证竞态条件 | `channels/data/new.go` | 稳定性问题 |
 | 🟡 中 | 流式传输流重组失败处理 | `protocol/stream_manager.go` | 健壮性问题 |

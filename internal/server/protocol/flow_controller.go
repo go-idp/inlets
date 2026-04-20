@@ -45,7 +45,9 @@ func (fc *FlowController) InitializeStream(streamId string, maxWindowSize ...int
 	}
 }
 
-// CanSend checks if data can be sent (read-only check, no state modification)
+// CanSend is a read-only snapshot of whether a send might fit the window.
+// Do not use CanSend followed by Send/TrySend for admission control — use TrySend only
+// so check and window update happen atomically under the same lock.
 func (fc *FlowController) CanSend(streamId string, size int) bool {
 	fc.mu.RLock()
 	defer fc.mu.RUnlock()

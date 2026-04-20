@@ -511,6 +511,10 @@ func (a *BinaryProtocolAdapter) handleBinaryMessage(msg *BinaryMessage) error {
 				for _, handler := range a.tcpDataHandlers {
 					handlers = append(handlers, handler)
 				}
+				if len(handlers) == 0 {
+					a.handlerMu.RUnlock()
+					return fmt.Errorf("protocol: streaming TCP with no tcp handlers for stream %s", msg.StreamID)
+				}
 				onComplete = func(data []byte) {
 					// TCP data is not compressed, call handlers directly
 					for _, handler := range handlers {
@@ -524,8 +528,10 @@ func (a *BinaryProtocolAdapter) handleBinaryMessage(msg *BinaryMessage) error {
 			}
 			a.handlerMu.RUnlock()
 
-			// Create stream with callbacks
-			a.streamManager.CreateStream(msg.StreamID, onComplete, onError)
+			if onComplete == nil {
+				return fmt.Errorf("protocol: streaming type %v has no handler for stream %s", msg.Type, msg.StreamID)
+			}
+			a.streamManager.EnsureStream(msg.StreamID, onComplete, onError)
 		}
 
 		// Add chunk to stream (stream will handle reassembly and call onComplete when done)

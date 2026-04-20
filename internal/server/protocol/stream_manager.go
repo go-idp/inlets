@@ -3,6 +3,8 @@ package protocol
 import (
 	"sync"
 	"time"
+
+	"github.com/go-zoox/logger"
 )
 
 // StreamState represents the state of a stream
@@ -204,6 +206,24 @@ func (sm *StreamManager) CreateStream(streamId string, onComplete func(data []by
 	return stream
 }
 
+// EnsureStream returns the existing stream or creates one with the given callbacks.
+// If the stream already exists, callbacks are ignored (first registration wins).
+func (sm *StreamManager) EnsureStream(streamId string, onComplete func(data []byte), onError func(error error)) *Stream {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if s := sm.streams[streamId]; s != nil {
+		return s
+	}
+
+	stream := NewStream(streamId)
+	stream.State = StreamStateActive
+	stream.OnComplete = onComplete
+	stream.OnError = onError
+	sm.streams[streamId] = stream
+	return stream
+}
+
 // GetStream gets a stream by ID
 func (sm *StreamManager) GetStream(streamId string) *Stream {
 	sm.mu.RLock()
@@ -212,17 +232,17 @@ func (sm *StreamManager) GetStream(streamId string) *Stream {
 	return sm.streams[streamId]
 }
 
-// AddChunk adds a chunk to a stream
+// AddChunk adds a chunk to an existing stream. The stream must be created first
+// (e.g. via EnsureStream from handleBinaryMessage); auto-create was removed because
+// it called CreateStream while holding the manager lock (deadlock) and used nil onComplete.
 func (sm *StreamManager) AddChunk(streamId string, sequence int, data []byte, isLast bool) {
 	sm.mu.RLock()
 	stream := sm.streams[streamId]
 	sm.mu.RUnlock()
 
 	if stream == nil {
-		// Auto-create stream if it doesn't exist
-		sm.mu.Lock()
-		stream = sm.CreateStream(streamId, nil, nil)
-		sm.mu.Unlock()
+		logger.Infof("[protocol:stream] AddChunk: no stream for %q seq=%d last=%v (dropped)", streamId, sequence, isLast)
+		return
 	}
 
 	stream.AddChunk(uint32(sequence), data, isLast)

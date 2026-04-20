@@ -275,3 +275,24 @@ go func() {
 - `internal/server/container/tunnel.go`：`Set` 的 `sourceServer` / `nil`
 - `internal/client/client.go`：监控通道 `error` + `fatal`
 - `internal/server/tunnel/tcp_test.go`：上述回归测试
+
+## 2026-04-20: 新协议流式重组 — EnsureStream 与 AddChunk
+
+### 问题发现
+
+- `StreamManager.AddChunk` 在流不存在时曾 **在已持锁情况下调用 `CreateStream` 再次加锁**，存在 **死锁**；自动创建的流 **`onComplete` 为 nil**，重组完成后无法交给 HTTP/TCP 处理器，表现为流式消息静默丢失。
+- `docs/features/NEW_PROTOCOL_ISSUES.md` 中 🔴「缺少 onComplete」与「流控竞态」需与当前实现对齐：发送路径应 **只用 `TrySend`**；分片序号在 **同一 `streamId` 内从 0 递增** 与按流隔离的重组一致，并非全局序号冲突。
+
+### 修复与约定
+
+1. **`EnsureStream(streamId, onComplete, onError)`**：幂等注册首帧回调；`AddChunk` **仅向已存在流追加**，否则打日志并丢弃，不再自动建流。
+2. **`handleBinaryMessage` 流式分支**：若无法解析出非 nil 的 `onComplete`（含流式 TCP 且无任何 `tcpDataHandlers`），**返回错误**；成功时 **`EnsureStream` + `AddChunk`**。
+3. **`FlowController.CanSend`**：注释标明 **禁止 `CanSend` + `Send` 做准入**；扣窗口用 **`TrySend`**。
+4. **文档**：`NEW_PROTOCOL_ISSUES.md` 顶部增加 **2026-04-20** 修复状态；概览表中原 🔴 三项标为已修复/已澄清。
+5. **测试**：`internal/server/protocol/stream_manager_test.go`（无流 AddChunk 不死锁、重组、首回调优先）。
+
+### 相关文件
+
+- `internal/server/protocol/stream_manager.go`、`stream_manager_test.go`
+- `internal/server/protocol/binary.go`、`flow_controller.go`
+- `docs/features/NEW_PROTOCOL_ISSUES.md`
