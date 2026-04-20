@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,7 +103,7 @@ func TestHandleBinaryMessage_SemanticHTTPDoesNotInvokeTCPHandler(t *testing.T) {
 // streaming HTTP requests when no OnHTTPRequest handler is registered (regression: nil onComplete).
 func TestHandleBinaryMessage_StreamingHTTPClientRequiresHandler(t *testing.T) {
 	caps := &client.Capabilities{
-		Flags: client.CapabilityFlagBinaryProtocol | client.CapabilityFlagStreaming | client.CapabilityFlagHTTPStreaming,
+		Flags:   client.CapabilityFlagBinaryProtocol | client.CapabilityFlagStreaming | client.CapabilityFlagHTTPStreaming,
 		Version: "2.0.0",
 		Features: &client.CapabilityFeatures{
 			ChunkSize: &client.ChunkSizeFeatures{Min: 256, Max: 65536, Default: 1024},
@@ -182,7 +183,9 @@ func TestWaitFlowSendSlotUnblocksAfterOnAck(t *testing.T) {
 	}()
 
 	start := time.Now()
-	a.waitFlowSendSlot("sid", 20)
+	if err := a.waitFlowSendSlot("sid", 20); err != nil {
+		t.Fatal(err)
+	}
 	if time.Since(start) < 20*time.Millisecond {
 		t.Fatalf("wait returned too fast (OnAck likely not applied): %v", time.Since(start))
 	}
@@ -191,3 +194,28 @@ func TestWaitFlowSendSlotUnblocksAfterOnAck(t *testing.T) {
 	}
 }
 
+// TestWaitFlowSendSlotTimeout verifies the wait does not run forever when the window never opens.
+func TestWaitFlowSendSlotTimeout(t *testing.T) {
+	old := flowSendWaitTimeout
+	flowSendWaitTimeout = 120 * time.Millisecond
+	t.Cleanup(func() { flowSendWaitTimeout = old })
+
+	fc := NewFlowController(100, nil)
+	a := &BinaryProtocolAdapter{flowController: fc}
+	fc.InitializeStream("sid", 100)
+	if !fc.TrySend("sid", 100) {
+		t.Fatal("TrySend should fill 100-byte window")
+	}
+
+	start := time.Now()
+	err := a.waitFlowSendSlot("sid", 1)
+	if err == nil {
+		t.Fatal("expected timeout when window stays full")
+	}
+	if !strings.Contains(err.Error(), "flow control send wait timeout") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d := time.Since(start); d < 100*time.Millisecond || d > 400*time.Millisecond {
+		t.Fatalf("elapsed %v, want ~flowSendWaitTimeout (with slack)", d)
+	}
+}

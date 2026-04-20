@@ -325,15 +325,24 @@ func (a *BinaryProtocolAdapter) getNextSequence(streamId string) uint32 {
 	return next
 }
 
+// flowSendWaitTimeout caps how long streaming send paths block waiting for flow-control window.
+// Tests may assign a shorter duration temporarily.
+var flowSendWaitTimeout = 60 * time.Second
+
 // waitFlowSendSlot blocks until flow-control TrySend admits chunkLen bytes for streamId.
 // Uses capped exponential backoff (5ms .. 100ms) instead of a fixed 50ms sleep.
-func (a *BinaryProtocolAdapter) waitFlowSendSlot(streamId string, chunkLen int) {
+// Returns an error if flowSendWaitTimeout elapses without acquiring capacity (avoids infinite hang when ACKs never arrive).
+func (a *BinaryProtocolAdapter) waitFlowSendSlot(streamId string, chunkLen int) error {
 	if a.flowController == nil {
-		return
+		return nil
 	}
+	deadline := time.Now().Add(flowSendWaitTimeout)
 	backoff := 5 * time.Millisecond
 	const maxBackoff = 100 * time.Millisecond
 	for !a.flowController.TrySend(streamId, chunkLen) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("protocol: flow control send wait timeout (%v) for stream %q (%d bytes)", flowSendWaitTimeout, streamId, chunkLen)
+		}
 		time.Sleep(backoff)
 		next := backoff * 2
 		if next > maxBackoff {
@@ -342,6 +351,7 @@ func (a *BinaryProtocolAdapter) waitFlowSendSlot(streamId string, chunkLen int) 
 			backoff = next
 		}
 	}
+	return nil
 }
 
 // handleBackpressure handles backpressure signals
@@ -914,7 +924,9 @@ func (a *BinaryProtocolAdapter) sendStreamingViaDataChannel(msgType MessageType,
 
 		// Check flow control (atomic check-and-update)
 		if a.flowController != nil {
-			a.waitFlowSendSlot(streamId, len(chunk))
+			if err := a.waitFlowSendSlot(streamId, len(chunk)); err != nil {
+				return err
+			}
 		}
 
 		// Build message with sequential numbering starting from 0
@@ -993,7 +1005,9 @@ func (a *BinaryProtocolAdapter) sendStreaming(msgType MessageType, streamId stri
 
 		// Check flow control (atomic check-and-update)
 		if a.flowController != nil {
-			a.waitFlowSendSlot(streamId, len(chunk))
+			if err := a.waitFlowSendSlot(streamId, len(chunk)); err != nil {
+				return err
+			}
 		}
 
 		// Build message with sequential numbering starting from 0
