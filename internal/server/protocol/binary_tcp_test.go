@@ -99,6 +99,37 @@ func TestHandleBinaryMessage_SemanticHTTPDoesNotInvokeTCPHandler(t *testing.T) {
 	}
 }
 
+func TestHandleBinaryMessage_TCPCloseInvokesOnTCPClose(t *testing.T) {
+	capabilities := &client.Capabilities{
+		Flags:   client.CapabilityFlagBinaryProtocol | client.CapabilityFlagTCPOverWS,
+		Version: "2.0.0",
+	}
+	adapter := NewBinaryProtocolAdapter(nil, capabilities, false)
+
+	var got string
+	adapter.OnTCPClose(func(sid string) error {
+		got = sid
+		return nil
+	})
+
+	raw, err := BuildBinaryMessage(BinaryMessage{
+		Type:     MessageTypeTCPClose,
+		StreamID: "c:req-1",
+		Sequence: 0,
+		Flags:    MessageFlagFIN,
+		Data:     nil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.HandleBinaryMessage(raw); err != nil {
+		t.Fatal(err)
+	}
+	if got != "c:req-1" {
+		t.Fatalf("OnTCPClose streamId = %q, want c:req-1", got)
+	}
+}
+
 // TestHandleBinaryMessage_StreamingHTTPClientRequiresHandler ensures EnsureStream path rejects
 // streaming HTTP requests when no OnHTTPRequest handler is registered (regression: nil onComplete).
 func TestHandleBinaryMessage_StreamingHTTPClientRequiresHandler(t *testing.T) {

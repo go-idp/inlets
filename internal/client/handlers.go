@@ -25,6 +25,11 @@ const upstreamRequestTimeout = 60 * time.Second
 
 const messageFlagFIN = 0x01
 
+const (
+	binaryMessageTypeTCPClose uint8 = 0x05
+	upstreamTCPDialTimeout          = 10 * time.Second
+)
+
 type httpStreamSession struct {
 	conn          net.Conn
 	contentLength int64
@@ -606,19 +611,51 @@ func pipeConn(src, dst net.Conn) {
 	}
 }
 
+// sendTCPStreamCloseNotify tells the server to tear down the user-facing TCP connection for this stream
+// (e.g. local upstream dial failed). Without this, the server keeps the source socket open and clients hang.
+func (c *Client) sendTCPStreamCloseNotify(streamID string) error {
+	c.sequenceCounterMu.Lock()
+	seq := c.sequenceCounter[streamID]
+	c.sequenceCounter[streamID] = seq + 1
+	c.sequenceCounterMu.Unlock()
+
+	binaryMsg := buildBinaryMessage(BinaryMessage{
+		Type:     binaryMessageTypeTCPClose,
+		StreamID: streamID,
+		Sequence: seq,
+		Flags:    1, // FIN — single-frame control
+		Data:     nil,
+	})
+	dataConn, writeMu := c.getDataChannel(streamID)
+	if dataConn == nil {
+		return fmt.Errorf("data channel not available for stream %s", streamID)
+	}
+	if writeMu != nil {
+		writeMu.Lock()
+	}
+	err := dataConn.WriteMessage(websocket.BinaryMessage, binaryMsg)
+	if writeMu != nil {
+		writeMu.Unlock()
+	}
+	return err
+}
+
 // forwardTCPConnectionOverWS handles TCP connection using new protocol (TCP over WebSocket)
 func (c *Client) forwardTCPConnectionOverWS(id, requestID, remoteHost string) {
 	streamID := fmt.Sprintf("%s:%s", id, requestID)
 
 	// Connect to local upstream
 	localAddr := joinHostPort(c.opts.UpstreamHost, c.opts.UpstreamPort)
-	localConn, err := net.Dial("tcp", localAddr)
+	localConn, err := net.DialTimeout("tcp", localAddr, upstreamTCPDialTimeout)
 	if err != nil {
 		c.logger.Printf("[local][%s] failed to connect: %v", streamID, err)
-		// Clean up placeholder if connection failed
+		if notifyErr := c.sendTCPStreamCloseNotify(streamID); notifyErr != nil {
+			c.logger.Printf("[local][%s] failed to notify server of upstream failure: %v", streamID, notifyErr)
+		}
 		c.tcpStreamsMu.Lock()
 		delete(c.tcpStreams, streamID)
 		c.tcpStreamsMu.Unlock()
+		c.removeDataChannel(streamID)
 		return
 	}
 
@@ -777,37 +814,28 @@ func (c *Client) handleTCPDataBinary(messageBuffer []byte) error {
 	var exists bool
 	var isPlaceholder bool
 
-	// Retry logic to handle race condition
-	// The stream should be registered in handleTCPConnect (with nil placeholder)
-	// and updated in forwardTCPConnectionOverWS when connection is established
-	for retry := 0; retry < 20; retry++ {
+	// Wait for placeholder to become a real conn or disappear (dial failed / stream closed).
+	// Window must cover upstreamTCPDialTimeout plus scheduling slack so user bytes are not dropped
+	// while the local socket is still connecting.
+	deadline := time.Now().Add(upstreamTCPDialTimeout + 3*time.Second)
+	for time.Now().Before(deadline) {
 		c.tcpStreamsMu.RLock()
 		conn, found := c.tcpStreams[binaryMsg.StreamID]
 		c.tcpStreamsMu.RUnlock()
 
-		if found {
-			exists = true
-			if conn == nil {
-				// Placeholder - connection not established yet, wait a bit
-				isPlaceholder = true
-				if retry < 19 {
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-			} else {
-				// Real connection found
-				localConn = conn
-				isPlaceholder = false
-				break
-			}
-		} else {
-			// Stream not registered yet - this shouldn't happen if handleTCPConnect was called first
-			// But wait a bit in case of race condition
-			if retry < 19 {
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
+		if !found {
+			c.logger.Printf("[tcp:data][%s] stream ended before upstream ready, dropping %d bytes",
+				binaryMsg.StreamID, len(data))
+			return nil
 		}
+		exists = true
+		if conn != nil {
+			localConn = conn
+			isPlaceholder = false
+			break
+		}
+		isPlaceholder = true
+		time.Sleep(10 * time.Millisecond)
 	}
 	if !exists || isPlaceholder {
 		c.logger.Printf("[tcp:data][%s] Stream not ready (exists: %v, placeholder: %v), ignoring %d bytes",

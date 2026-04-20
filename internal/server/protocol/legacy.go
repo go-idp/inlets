@@ -248,6 +248,11 @@ func (a *LegacyProtocolAdapter) OnTCPData(handler func(streamId string, data []b
 	}
 }
 
+// OnTCPClose is a no-op for legacy protocol (TCP-over-WS close signals are not used).
+func (a *LegacyProtocolAdapter) OnTCPClose(_ func(streamId string) error) func() {
+	return func() {}
+}
+
 // Destroy cleans up resources
 func (a *LegacyProtocolAdapter) Destroy() {
 	// Close connection if needed

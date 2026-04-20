@@ -93,6 +93,9 @@ func (f *fakeHTTPTunnelAdapter) OnHTTPResponseBody(handler func(id string, chunk
 func (f *fakeHTTPTunnelAdapter) OnTCPData(handler func(streamId string, data []byte) error) func() {
 	return func() {}
 }
+func (f *fakeHTTPTunnelAdapter) OnTCPClose(_ func(streamId string) error) func() {
+	return func() {}
+}
 func (f *fakeHTTPTunnelAdapter) Destroy()                      {}
 func (f *fakeHTTPTunnelAdapter) SetConnWriteMu(mu *sync.Mutex) {}
 

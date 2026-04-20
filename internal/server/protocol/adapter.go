@@ -41,6 +41,10 @@ type ProtocolAdapter interface {
 	// Returns an unsubscribe function
 	OnTCPData(handler func(streamId string, data []byte) error) func()
 
+	// OnTCPClose registers a handler for client-side TCP stream teardown (e.g. upstream dial failed).
+	// Legacy adapters return a no-op unsubscribe.
+	OnTCPClose(handler func(streamId string) error) func()
+
 	// Destroy cleans up resources
 	Destroy()
 

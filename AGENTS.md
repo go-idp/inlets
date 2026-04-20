@@ -354,3 +354,27 @@ go func() {
 
 - `internal/server/protocol/binary_tcp_test.go`
 - `internal/server/protocol/binary.go`（`HandleBinaryMessage` / `waitFlowSendSlot`）
+
+## 2026-04-20: TCP over WebSocket — 上游未就绪时用户连接永久挂起
+
+### 背景与问题现象
+
+新协议下用户访问服务端暴露的 TCP 端口时，服务端已 `Accept` 并保持 **`sourceConn`**，客户端在收到 `tcp:connect` 后对本地上游 **`Dial`**。若**真实上游尚未监听**（或长时间不可达），客户端 **`Dial` 失败**后仅从 `tcpStreams` 删除占位项，**未通知服务端**结束该条流；服务端不关闭用户侧 TCP，表现为**一直挂起**。上游随后启动也**无法挽救同一条**用户连接：客户端不会对同一 `requestId` 再次拨号，用户若不重试则仍卡住。
+
+### 修复要点
+
+1. **客户端**：`Dial` 改为 **`DialTimeout`（如 10s）**；失败时经数据通道发送 **`MessageTypeTCPClose` (0x05)**，再删 stream 并 **`removeDataChannel`**。
+2. **协议**：`BinaryProtocolAdapter.handleBinaryMessage` 对 **TCPClose** 早分发；新增 **`OnTCPClose`**（`ProtocolAdapter` / `LegacyProtocolAdapter` 实现）；`shouldUseCompression` 排除 TCPClose。
+3. **服务端隧道**：`setupTCPStreamOverWebSocket` 注册 **`OnTCPClose`**，用 **`sync.Once`** 统一关闭 **`sourceConn`**、取消 **TCP 数据订阅**，与上传 goroutine 退出路径一致；下载侧写失败也走同一 **`closeUserConn`**。
+4. **客户端入站数据**：`handleTCPDataBinary` 等待占位解析为真实 `net.Conn` 的窗口覆盖 **`DialTimeout + 缓冲`**，减少上游稍慢时用户字节被丢弃。
+
+### 经验总结与审查清单
+
+- **任意「客户端独占」的失败**（上游连不上、鉴权失败等）若会影响用户侧连接，必须有**对侧可见的 teardown**（本例为 TCPClose），否则易出现「一端已放弃、一端仍 Read 阻塞」的挂死。
+- **审查清单**：[ ] 新协议下是否所有「建连失败」路径都会关闭用户 `sourceConn` 或等价复位？[ ] 占位 + 异步 `Dial` 时，入站数据等待时间是否覆盖 `Dial` 时长？
+
+### 相关文件
+
+- `internal/client/handlers.go`
+- `internal/server/protocol/adapter.go`、`binary.go`、`legacy.go`、`binary_tcp_test.go`
+- `internal/server/tunnel/tcp.go`、`http_hijack_integration_test.go`

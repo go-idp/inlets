@@ -160,23 +160,25 @@ const (
 
 // BinaryProtocolAdapter implements the binary protocol adapter
 type BinaryProtocolAdapter struct {
-	conn                    *websocket.Conn
-	connWriteMu             *sync.Mutex             // monitor conn write serialization (server)
-	dataConn                *websocket.Conn         // Optional data channel connection (legacy/shared)
-	dataWriteMu             *sync.Mutex             // Mutex for shared data channel writes
-	dataChannels            map[string]*dataChannel // Per-stream data channel connections
-	dataChannelsMu          sync.RWMutex
-	isClient                bool
-	capabilities            *client.Capabilities
-	httpRequestHandler      func(id string, data []byte) error
-	httpResponseHandler     func(id string, data []byte) error
-	httpRequestHeadHandler  func(id string, head []byte, fin bool) error
-	httpRequestBodyHandler  func(id string, chunk []byte, fin bool) error
-	httpResponseHeadHandler func(id string, head []byte, fin bool) error
-	httpResponseBodyHandler func(id string, chunk []byte, fin bool) error
-	tcpDataHandlers         map[int]func(streamId string, data []byte) error
-	handlerMu               sync.RWMutex
-	handlerIDCounter        int
+	conn                     *websocket.Conn
+	connWriteMu              *sync.Mutex             // monitor conn write serialization (server)
+	dataConn                 *websocket.Conn         // Optional data channel connection (legacy/shared)
+	dataWriteMu              *sync.Mutex             // Mutex for shared data channel writes
+	dataChannels             map[string]*dataChannel // Per-stream data channel connections
+	dataChannelsMu           sync.RWMutex
+	isClient                 bool
+	capabilities             *client.Capabilities
+	httpRequestHandler       func(id string, data []byte) error
+	httpResponseHandler      func(id string, data []byte) error
+	httpRequestHeadHandler   func(id string, head []byte, fin bool) error
+	httpRequestBodyHandler   func(id string, chunk []byte, fin bool) error
+	httpResponseHeadHandler  func(id string, head []byte, fin bool) error
+	httpResponseBodyHandler  func(id string, chunk []byte, fin bool) error
+	tcpDataHandlers          map[int]func(streamId string, data []byte) error
+	tcpCloseHandlers         map[int]func(streamId string) error
+	handlerMu                sync.RWMutex
+	handlerIDCounter         int
+	tcpCloseHandlerIDCounter int
 
 	sequenceCounter      map[string]uint32
 	sequenceCounterMu    sync.Mutex
@@ -198,6 +200,7 @@ func NewBinaryProtocolAdapter(conn *websocket.Conn, capabilities *client.Capabil
 		isClient:             isClient,
 		capabilities:         capabilities,
 		tcpDataHandlers:      make(map[int]func(streamId string, data []byte) error),
+		tcpCloseHandlers:     make(map[int]func(streamId string) error),
 		sequenceCounter:      make(map[string]uint32),
 		compressionAlgorithm: CompressionBrotli,
 		chunkSize:            64 * 1024, // 64KB
@@ -471,6 +474,21 @@ func (a *BinaryProtocolAdapter) HandleBinaryMessage(message []byte) error {
 
 // handleBinaryMessage handles a received binary message
 func (a *BinaryProtocolAdapter) handleBinaryMessage(msg *BinaryMessage) error {
+	if msg.Type == MessageTypeTCPClose {
+		a.handlerMu.RLock()
+		handlers := make([]func(streamId string) error, 0, len(a.tcpCloseHandlers))
+		for _, h := range a.tcpCloseHandlers {
+			handlers = append(handlers, h)
+		}
+		a.handlerMu.RUnlock()
+		for _, h := range handlers {
+			if err := h(msg.StreamID); err != nil {
+				logger.Infof("[protocol:binary] tcp close handler error streamId=%q: %v", msg.StreamID, err)
+			}
+		}
+		return nil
+	}
+
 	isLast := (msg.Flags & MessageFlagFIN) != 0
 
 	// Check flow control
@@ -620,7 +638,7 @@ func (a *BinaryProtocolAdapter) handleBinaryMessage(msg *BinaryMessage) error {
 // shouldUseCompression checks if compression should be used for the message type
 func (a *BinaryProtocolAdapter) shouldUseCompression(msgType MessageType) bool {
 	// TCP data is not compressed
-	if msgType == MessageTypeTCPData {
+	if msgType == MessageTypeTCPData || msgType == MessageTypeTCPClose {
 		return false
 	}
 	// HTTP requests/responses use compression if supported
@@ -1209,6 +1227,22 @@ func (a *BinaryProtocolAdapter) OnTCPData(handler func(streamId string, data []b
 		a.handlerMu.Lock()
 		defer a.handlerMu.Unlock()
 		delete(a.tcpDataHandlers, handlerID)
+	}
+}
+
+// OnTCPClose registers a handler when the client signals that a TCP stream must be torn down.
+func (a *BinaryProtocolAdapter) OnTCPClose(handler func(streamId string) error) func() {
+	a.handlerMu.Lock()
+	defer a.handlerMu.Unlock()
+
+	id := a.tcpCloseHandlerIDCounter
+	a.tcpCloseHandlerIDCounter++
+	a.tcpCloseHandlers[id] = handler
+
+	return func() {
+		a.handlerMu.Lock()
+		defer a.handlerMu.Unlock()
+		delete(a.tcpCloseHandlers, id)
 	}
 }
 

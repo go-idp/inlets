@@ -363,27 +363,31 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 	var uploadMu sync.Mutex
 	sourceConnClosed := false
 	var unsubscribe func()
+	var unsubscribeClose func()
+	var closeOnce sync.Once
 
-	// Handle data from source socket -> WebSocket (upload)
-	go func() {
-		defer func() {
-			// Cleanup on connection close
+	closeUserConn := func() {
+		closeOnce.Do(func() {
 			uploadMu.Lock()
 			sourceConnClosed = true
 			uploadMu.Unlock()
 
-			// Unsubscribe from TCP data handler
 			if unsubscribe != nil {
 				unsubscribe()
 			}
-
-			// Close source connection
+			if unsubscribeClose != nil {
+				unsubscribeClose()
+			}
 			sourceConn.Close()
 
-			// Log stats
 			statsInfo := t.ctx.TrafficStats.FormatStats(clientID)
 			logger.Infof("[tunnel:tcp   ][%s] connection closed - Traffic Stats: %s", streamID, statsInfo)
-		}()
+		})
+	}
+
+	// Handle data from source socket -> WebSocket (upload)
+	go func() {
+		defer closeUserConn()
 
 		buf := make([]byte, 32*1024) // 32KB buffer
 		for {
@@ -454,19 +458,18 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 		// Write to source connection
 		if _, err := sourceConn.Write(data); err != nil {
 			logger.Infof("[tunnel:tcp   ][%s] Failed to write to source socket: %v", streamID, err)
-			// Mark connection as closed
-			uploadMu.Lock()
-			sourceConnClosed = true
-			uploadMu.Unlock()
-			// Close connection
-			sourceConn.Close()
-			// Unsubscribe from TCP data handler
-			if unsubscribe != nil {
-				unsubscribe()
-			}
+			closeUserConn()
 			return err
 		}
 
+		return nil
+	})
+
+	unsubscribeClose = adapter.OnTCPClose(func(streamId string) error {
+		if streamId != streamID {
+			return nil
+		}
+		closeUserConn()
 		return nil
 	})
 
