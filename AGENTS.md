@@ -326,3 +326,31 @@ go func() {
 - `internal/server/channels/monitor/new.go`
 - `internal/server/protocol/binary.go`
 - `docs/features/NEW_PROTOCOL_ISSUES.md`
+
+## 2026-04-20: 二进制协议回归测试 — HandleBinaryMessage 与流控等待
+
+### 背景
+
+`handleBinaryMessage` 在流式协商下若缺少对应 handler 必须返回错误（避免 `EnsureStream` 带 nil `onComplete`）；非流式路径上 HTTP 处理器错误应向上传播；`waitFlowSendSlot` 在循环内调用 **`TrySend`**（失败不扣窗口、成功则占用窗口），需确认对端 **`OnAck`** 释放窗口后等待能结束。
+
+### 测试用例（`binary_tcp_test.go`）
+
+1. **`TestHandleBinaryMessage_StreamingHTTPClientRequiresHandler`**：客户端 `Streaming` + `HTTPStreaming`、未注册 `OnHTTPRequest` 时，首帧应报错（`streaming type ... has no handler`）。
+2. **`TestHandleBinaryMessage_PropagatesHTTPResponseHandlerError`**：服务端非流式 `HTTPResponse`，`OnHTTPResponse` 返回的 error 经 `HandleBinaryMessage` 原样返回（`errors.Is`）。
+3. **`TestHandleBinaryMessage_InvalidWireReturnsError`**：截断/过短线消息，`HandleBinaryMessage` 返回解析错误。
+4. **`TestWaitFlowSendSlotUnblocksAfterOnAck`**：`InitializeStream` + `TrySend` 占满窗口后，异步 `OnAck` 再调用 `waitFlowSendSlot`；用较短延迟 +「耗时大于阈值」断言避免忙等误判，全 suite 下已通过。
+
+### 经验总结
+
+- 协议分发层测试优先构造 **最小 `Capabilities` + `BuildBinaryMessage`**，无需真实 WebSocket。
+- 测 `waitFlowSendSlot` 时注意：成功退出时 **最后一次 `TrySend` 已在等待循环内执行**，`SendWindow` 会反映该次占用；后续断言应与此一致。
+
+### 审查清单
+
+- [ ] 流式/非流式两条路径对「缺 handler」和「handler 报错」是否都有覆盖？
+- [ ] 流控相关测试若涉时间，是否留有 CI 抖动余量？
+
+### 相关文件
+
+- `internal/server/protocol/binary_tcp_test.go`
+- `internal/server/protocol/binary.go`（`HandleBinaryMessage` / `waitFlowSendSlot`）
