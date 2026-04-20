@@ -30,7 +30,8 @@ const (
 
 // GetTokenOptions contains options for token retrieval
 type GetTokenOptions struct {
-	Type TunnelType `json:"type,omitempty"`
+	Type        TunnelType `json:"type,omitempty"`
+	OpaqueChild bool       `json:"opaqueChild,omitempty"` // true: spawned session; omit tunnel list in token
 }
 
 // TokenResponse represents the response from GetToken function

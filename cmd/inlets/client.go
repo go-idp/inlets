@@ -90,7 +90,6 @@ Note: Flags must be placed before positional arguments.`,
 			},
 		},
 		Action: func(c *cli.Context) error {
-			// Get positional arguments using urfave/cli/v2 standard way
 			if c.NArg() < 2 {
 				return cli.ShowAppHelp(c)
 			}

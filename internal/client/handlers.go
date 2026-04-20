@@ -105,7 +105,38 @@ func (c *Client) handleAuthenticateResponse(payload interface{}) error {
 		c.logger.Printf("Forwarding: %s -> %s://%s:%d", resp.URL, c.opts.Type, c.opts.UpstreamHost, c.opts.UpstreamPort)
 	}
 
+	c.spawnServerConfiguredTunnels(&resp)
+
 	return nil
+}
+
+func (c *Client) spawnServerConfiguredTunnels(resp *AuthenticateResponse) {
+	if c.opts.OpaqueChild || resp.Config == nil || len(resp.Config.Tunnels) == 0 {
+		return
+	}
+	snap := AuthSnapshotFromOptions(c.opts)
+	myIdx := -1
+	if snap != nil {
+		myIdx = MatchTunnelSpecIndex(snap, resp.Config.Tunnels)
+	}
+	for i := range resp.Config.Tunnels {
+		if myIdx >= 0 && i == myIdx {
+			continue
+		}
+		spec := resp.Config.Tunnels[i]
+		childOpts, err := ChildOptionsFromSpec(c.opts, &spec)
+		if err != nil {
+			c.logger.Printf("[tunnels] skip %q: %v", spec.Name, err)
+			continue
+		}
+		go func(sp TunnelSpec, o *Options) {
+			c.logger.Printf("[tunnels] starting server-listed tunnel %q (%s)", sp.Name, sp.Type)
+			cl := New(o)
+			if err := cl.Run(); err != nil {
+				c.logger.Printf("[tunnels] tunnel %q exited: %v", sp.Name, err)
+			}
+		}(spec, childOpts)
+	}
 }
 
 func (c *Client) handleHTTPRequest(payload interface{}) error {
@@ -343,7 +374,7 @@ func (c *Client) readUpstreamAndStreamHTTPResponse(id string, upstream net.Conn,
 
 	respCL := resp.ContentLength
 	headFin := respCL == 0
-	if resp.TransferEncoding != nil && len(resp.TransferEncoding) > 0 {
+	if len(resp.TransferEncoding) > 0 {
 		headFin = false
 	}
 	if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseHead, id, headBytes, headFin); err != nil {

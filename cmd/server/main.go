@@ -55,12 +55,39 @@ type ClientConfig struct {
 	ClientSecret   string                  `yaml:"clientSecret"`
 	Config         *client.Config          `yaml:"config"`
 	BandwidthLimit *limiter.BandwidthLimit `yaml:"bandwidthLimit"`
+	Tunnels        []client.TunnelSpec     `yaml:"tunnels,omitempty"`
 }
 
 // BandwidthLimitsConfig represents bandwidth limits configuration
 type BandwidthLimitsConfig struct {
 	Global  *limiter.BandwidthLimit            `yaml:"global"`
 	Clients map[string]*limiter.BandwidthLimit `yaml:"clients"`
+}
+
+func tokenResponseForCredentialsClient(cli *ClientConfig, includeTunnels bool) (*types.TokenResponse, error) {
+	var clientConfig *client.Config
+	if cli.Config != nil {
+		clientConfig = &client.Config{
+			Version:                cli.Config.Version,
+			Notification:           cli.Config.Notification,
+			NegotiatedCapabilities: cli.Config.NegotiatedCapabilities,
+		}
+		if clientConfig.Version == "" {
+			clientConfig.Version = ServerVersion
+		}
+	} else {
+		clientConfig = &client.Config{Version: ServerVersion}
+	}
+	if includeTunnels && len(cli.Tunnels) > 0 {
+		t := make([]client.TunnelSpec, len(cli.Tunnels))
+		copy(t, cli.Tunnels)
+		clientConfig.Tunnels = t
+	}
+	return &types.TokenResponse{
+		AuthType: types.AuthTypeCredentials,
+		Token:    cli.ClientSecret,
+		Config:   clientConfig,
+	}, nil
 }
 
 func main() {
@@ -416,13 +443,10 @@ func createGetTokenFunction(token string, configFile *ServerConfig) types.GetTok
 		if authType == types.AuthTypeCredentials {
 			// Look up client secret from config file
 			if configFile != nil && len(configFile.Clients) > 0 {
-				for _, client := range configFile.Clients {
-					if client.ClientID == clientId {
-						return &types.TokenResponse{
-							AuthType: types.AuthTypeCredentials,
-							Token:    client.ClientSecret,
-							Config:   client.Config,
-						}, nil
+				for i := range configFile.Clients {
+					cli := &configFile.Clients[i]
+					if cli.ClientID == clientId {
+						return tokenResponseForCredentialsClient(cli, options == nil || !options.OpaqueChild)
 					}
 				}
 				return nil, fmt.Errorf("client not found: %s", clientId)
@@ -478,13 +502,10 @@ func createGetTokenFunctionWithRef(token string, configRef *struct {
 		if authType == types.AuthTypeCredentials {
 			// Look up client secret from config file
 			if configFile != nil && len(configFile.Clients) > 0 {
-				for _, client := range configFile.Clients {
-					if client.ClientID == clientId {
-						return &types.TokenResponse{
-							AuthType: types.AuthTypeCredentials,
-							Token:    client.ClientSecret,
-							Config:   client.Config,
-						}, nil
+				for i := range configFile.Clients {
+					cli := &configFile.Clients[i]
+					if cli.ClientID == clientId {
+						return tokenResponseForCredentialsClient(cli, options == nil || !options.OpaqueChild)
 					}
 				}
 				return nil, fmt.Errorf("client not found: %s", clientId)

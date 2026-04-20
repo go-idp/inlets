@@ -375,6 +375,7 @@ func (c *Client) authenticate() error {
 		ClientId:     c.opts.ClientId,
 		Signature:    signature,
 		Capabilities: capabilities,
+		OpaqueChild:  c.opts.OpaqueChild,
 	}
 
 	// Send authentication on monitor channel - message format is [type, payload]

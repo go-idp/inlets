@@ -378,3 +378,33 @@ go func() {
 - `internal/client/handlers.go`
 - `internal/server/protocol/adapter.go`、`binary.go`、`legacy.go`、`binary_tcp_test.go`
 - `internal/server/tunnel/tcp.go`、`http_hijack_integration_test.go`
+
+## 2026-04-20: 服务端 per-client `tunnels` 与 CLI 隧道合并（默认同时支持）
+
+### 背景
+
+凭证鉴权下，**主连接**始终按客户端 CLI 的 `type` / `upstream` / `-p` / `-s` 建隧道，**不在服务端覆盖**鉴权内容。服务端 YAML 的 `tunnels` 通过 **GetToken** 与鉴权成功响应带给协调进程；客户端用 `AuthSnapshotFromOptions` + `MatchTunnelSpecIndex` 判断当前进程对应 YAML 的哪一行（若有），对其余行 `ChildOptionsFromSpec` 拉起子会话。子会话在鉴权里设 `opaqueChild`，**GetToken** 不再附带 `tunnels` 列表，避免递归拉起。
+
+### 做法要点
+
+1. `GetTokenOptions.OpaqueChild` / `Authentication.opaqueChild` / `Options.OpaqueChild`：仅子会话为 true。
+2. **Monitor**：不再对入站 `auth` 做 `ApplyTunnelSpecToAuthentication`；`includeTunnelList` = 凭证且 YAML 有条目且非 opaqueChild。
+3. **客户端**：`spawnServerConfiguredTunnels` 对 `i != myIdx` 的 YAML 行启动进程；`myIdx == -1` 时启动全部 YAML 行对应的子会话。
+
+### 审查清单
+
+- [ ] 主连接是否始终等于用户 CLI？
+- [ ] 子会话是否不带 `config.tunnels`？
+
+### 经验总结
+
+- **不要**在 monitor 里用 YAML 覆盖首包 `auth`，否则「服务端 tunnels」与「客户端自己指定隧道」无法并存；合并策略应是主进程按 CLI 建链，YAML 仅用于列出**额外**会话并在协调进程里 `spawn`。
+- **`opaqueChild`**：子进程必须在鉴权里标记，且 **GetToken** 对子连接不返回 `tunnels`，否则子进程会再按 YAML 拉一层，递归爆炸。
+- **匹配**：`MatchTunnelSpecIndex` + `tunnelSpecMatchesAuth` 需与 `ApplyTunnelSpecToAuthentication` / `SyncOptsFromTunnelSpec` 对 `remotePort`、`subDomain` 的规则一致（如 TCP `remotePort==0` 表示沿用客户端 `-p`）；自动起的子会话若需固定公网端口，YAML 中应写死 `remotePort`（`ChildOptionsFromSpec` 对 `remotePort==0` 会报错并提示单独起客户端或补配置）。
+
+### 相关文件
+
+- `cmd/inlets/server.go`、`cmd/server/main.go`
+- `internal/server/channels/monitor/auth.go`
+- `internal/client/tunnel_spec_auth.go`（`AuthSnapshotFromOptions`、`ParseUpstream`）、`handlers.go`、`child_options.go`、`client.go`
+- `conf/example/server.yaml`

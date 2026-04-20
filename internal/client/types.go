@@ -51,6 +51,17 @@ type Options struct {
 	Version             string
 	ReconnectMaxRetries int           // Maximum number of reconnection retries, default 1000
 	ReconnectInterval   time.Duration // Interval between reconnection attempts, default 3s
+	// OpaqueChild: true for sessions auto-spawned from server tunnel list (do not re-spawn; auth omits tunnel list).
+	OpaqueChild bool
+}
+
+// TunnelSpec is a declared tunnel for a client (server YAML and authenticate config payload).
+type TunnelSpec struct {
+	Name       string `yaml:"name" json:"name"`
+	Type       string `yaml:"type" json:"type"`
+	Upstream   string `yaml:"upstream" json:"upstream"`
+	SubDomain  string `yaml:"subDomain" json:"subDomain,omitempty"`   // HTTP: empty = use client -s (or server-assigned when both empty)
+	RemotePort int    `yaml:"remotePort" json:"remotePort,omitempty"` // TCP: 0 or omit = use client -p; else pin public listen port on server
 }
 
 type CompressionFeatures struct {
@@ -91,6 +102,7 @@ type Authentication struct {
 	ClientId     string        `json:"clientId,omitempty"`
 	Signature    string        `json:"signature"`
 	Capabilities *Capabilities `json:"capabilities,omitempty"`
+	OpaqueChild  bool          `json:"opaqueChild,omitempty"`
 }
 
 type AuthenticateResponse struct {
@@ -107,6 +119,7 @@ type Config struct {
 	Version                string              `json:"version,omitempty"`
 	Notification           *NotificationConfig `json:"notification,omitempty"`
 	NegotiatedCapabilities *Capabilities       `json:"negotiatedCapabilities,omitempty"`
+	Tunnels                []TunnelSpec        `json:"tunnels,omitempty"`
 }
 
 // compareVersion compares two version strings (e.g., "2.0.0" vs "1.9.0")

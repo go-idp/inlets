@@ -57,6 +57,7 @@ type ClientConfig struct {
 	ClientSecret   string                  `yaml:"clientSecret"`
 	Config         *client.Config          `yaml:"config"`
 	BandwidthLimit *limiter.BandwidthLimit `yaml:"bandwidthLimit"`
+	Tunnels        []client.TunnelSpec     `yaml:"tunnels,omitempty"`
 }
 
 // BandwidthLimitsConfig represents bandwidth limits configuration
@@ -415,19 +416,26 @@ func createGetTokenFunctionWithRef(configRef *struct {
 		if authType == types.AuthTypeCredentials {
 			for _, clientCfg := range configFile.Clients {
 				if clientCfg.ClientID == clientId {
-					// Use client config if provided, otherwise create default config with version 2.0.0
-					clientConfig := clientCfg.Config
-					if clientConfig == nil {
+					// Copy per-request so tunnel lists and nested fields are not shared across handshakes.
+					var clientConfig *client.Config
+					if clientCfg.Config != nil {
+						clientConfig = &client.Config{
+							Version:                clientCfg.Config.Version,
+							Notification:           clientCfg.Config.Notification,
+							NegotiatedCapabilities: clientCfg.Config.NegotiatedCapabilities,
+						}
+						if clientConfig.Version == "" {
+							clientConfig.Version = ServerVersion
+						}
+					} else {
 						clientConfig = &client.Config{
 							Version: ServerVersion,
 						}
-					} else if clientConfig.Version == "" {
-						// If config exists but version is empty, create new config with default version
-						clientConfig = &client.Config{
-							Version:                ServerVersion,
-							Notification:           clientConfig.Notification,
-							NegotiatedCapabilities: clientConfig.NegotiatedCapabilities,
-						}
+					}
+					if len(clientCfg.Tunnels) > 0 && (options == nil || !options.OpaqueChild) {
+						tunnelsCopy := make([]client.TunnelSpec, len(clientCfg.Tunnels))
+						copy(tunnelsCopy, clientCfg.Tunnels)
+						clientConfig.Tunnels = tunnelsCopy
 					}
 					return &types.TokenResponse{
 						AuthType: types.AuthTypeCredentials,

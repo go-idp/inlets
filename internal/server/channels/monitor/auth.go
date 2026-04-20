@@ -69,7 +69,8 @@ func handleAuthenticate(
 	}
 
 	tokenOptions := &types.GetTokenOptions{
-		Type: types.TunnelType(auth.Type),
+		Type:        types.TunnelType(auth.Type),
+		OpaqueChild: auth.OpaqueChild,
 	}
 
 	tokenRes, err := options.Token(authType, auth.ClientId, tokenOptions)
@@ -77,6 +78,10 @@ func handleAuthenticate(
 		sendAuthResponse(wsConn, options, false, fmt.Sprintf("invalid client: %v", err), "", nil)
 		return err
 	}
+
+	// Primary connection uses client CLI as-is (no YAML overlay on auth). Tunnel list is for spawning other entries.
+	includeTunnelList := authType == types.AuthTypeCredentials && tokenRes.Config != nil &&
+		len(tokenRes.Config.Tunnels) > 0 && !auth.OpaqueChild
 
 	// Check public auth type
 	if tokenRes.AuthType == types.AuthTypePublic && auth.SubDomain != "" {
@@ -206,6 +211,9 @@ func handleAuthenticate(
 	// Merge client config if exists
 	if tokenRes.Config != nil {
 		config.Notification = tokenRes.Config.Notification
+		if len(tokenRes.Config.Tunnels) > 0 && includeTunnelList {
+			config.Tunnels = tokenRes.Config.Tunnels
+		}
 	}
 
 	// Send authentication success response
