@@ -45,30 +45,30 @@ clients:
       download: 1024000  # 1MB/s in bytes per second
     # Per-client tunnels (optional): with credentials, merged with the client's CLI tunnel — this process keeps
     # your command-line type/upstream/-p/-s; other rows are started as extra client sessions (set tcp remotePort for those).
-    # HTTP: subDomain optional (omit to use client -s). TCP: remotePort optional (0/omit = use client -p on bootstrap).
+    # HTTP: subDomain optional (omit to use client `http -s`). TCP: remotePort optional (0/omit = use client -p on bootstrap).
     # Extra TCP tunnels started automatically must set remotePort in YAML.
-    tunnels:
-      - name: web
-        type: http
-        upstream: 127.0.0.1:9000
-        subDomain: myapp
-        # Optional: Authorization rules checked at the server before forwarding to the client tunnel.
-        auth:
-          enable: true
-          users:
-            - type: bearer
-              token: "service-token"
-            - type: basic
-              username: u
-              password: p
-      - name: tcp
-        type: tcp
-        upstream: 127.0.0.1:9000
-        remotePort: 20100
-      - name: ssh
-        type: tcp
-        upstream: 127.0.0.1:22
-        remotePort: 20200
+    # tunnels:
+    #   - name: web
+    #     type: http
+    #     upstream: 127.0.0.1:9000
+    #     subDomain: myapp
+    #     # Optional: Authorization rules checked at the server before forwarding to the client tunnel.
+    #     auth:
+    #       enable: true
+    #       users:
+    #         - type: bearer
+    #           token: "service-token"
+    #         - type: basic
+    #           username: u
+    #           password: p
+    #   - name: tcp
+    #     type: tcp
+    #     upstream: 127.0.0.1:9000
+    #     remotePort: 20100
+    #   - name: ssh
+    #     type: tcp
+    #     upstream: 127.0.0.1:22
+    #     remotePort: 20200
 
   - clientId: client2
     clientSecret: secret2

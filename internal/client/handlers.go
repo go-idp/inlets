@@ -228,6 +228,7 @@ func (c *Client) handleHTTPRequestStreamHead(id string, msg BinaryMessage) error
 		return err
 	}
 	fin := (msg.Flags & messageFlagFIN) != 0
+	head = injectUpstreamBasicAuth(head, c.opts.UpstreamUsername, c.opts.UpstreamPassword)
 	reqLine := tunnelHTTPRequestLine(string(head))
 
 	c.httpStreamMu.Lock()
@@ -429,6 +430,8 @@ func (c *Client) forwardHTTPRequest(id string, data string) {
 		return
 	}
 	defer conn.Close()
+
+	data = string(injectUpstreamBasicAuth([]byte(data), c.opts.UpstreamUsername, c.opts.UpstreamPassword))
 
 	if err := conn.SetDeadline(time.Now().Add(upstreamRequestTimeout)); err != nil {
 		c.logger.Printf("[tunnel:http] id=%s %s upstream deadline: %v", id, reqLine, err)

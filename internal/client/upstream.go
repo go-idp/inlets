@@ -1,10 +1,32 @@
 package client
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/base64"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 )
+
+// injectUpstreamBasicAuth sets Authorization on a raw HTTP/1.x request before it is sent to the local upstream.
+func injectUpstreamBasicAuth(raw []byte, username, password string) []byte {
+	if strings.TrimSpace(username) == "" {
+		return raw
+	}
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(raw)))
+	if err != nil {
+		return raw
+	}
+	defer req.Body.Close()
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
+	var buf bytes.Buffer
+	if err := req.Write(&buf); err != nil {
+		return raw
+	}
+	return buf.Bytes()
+}
 
 // ParseUpstream parses an upstream like the CLI: port only ("9000") or "host:port".
 func ParseUpstream(upstream string) (host string, port int, err error) {

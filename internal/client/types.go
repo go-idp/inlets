@@ -38,6 +38,8 @@ type Options struct {
 	Type                string
 	UpstreamHost        string
 	UpstreamPort        int
+	UpstreamUsername    string // HTTP tunnel: Basic auth when dialing upstream (optional)
+	UpstreamPassword    string
 	AuthType            string
 	Token               string
 	ClientId            string
@@ -60,7 +62,7 @@ type TunnelSpec struct {
 	Name       string                `yaml:"name" json:"name"`
 	Type       string                `yaml:"type" json:"type"`
 	Upstream   string                `yaml:"upstream" json:"upstream"`
-	SubDomain  string                `yaml:"subDomain" json:"subDomain,omitempty"`   // HTTP: empty = use client -s (or server-assigned when both empty)
+	SubDomain  string                `yaml:"subDomain" json:"subDomain,omitempty"`   // HTTP: empty = use client `http -s` (or server-assigned when both empty)
 	RemotePort int                   `yaml:"remotePort" json:"remotePort,omitempty"` // TCP: 0 or omit = use client -p; else pin public listen port on server
 	Auth       *HTTPIncomingAuthRule `yaml:"auth" json:"auth,omitempty"`             // HTTP: optional auth policy validated at server before forwarding.
 	// Deprecated: use auth.enable + auth.users.
@@ -120,6 +122,8 @@ type Authentication struct {
 	Signature    string        `json:"signature"`
 	Capabilities *Capabilities `json:"capabilities,omitempty"`
 	OpaqueChild  bool          `json:"opaqueChild,omitempty"`
+	// HTTPIngressBasic: when the server tunnel spec does not define edge auth, enforce this Basic policy on the public URL (same credentials the client uses toward upstream).
+	HTTPIngressBasic *HTTPTunnelAuth `json:"httpIngressBasic,omitempty"`
 }
 
 type AuthenticateResponse struct {

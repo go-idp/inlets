@@ -142,4 +142,41 @@ func TestRequiresModernClientForAdvancedFeatures(t *testing.T) {
 	if blocked, _ := requiresModernClientForAdvancedFeatures("2.0.0", &client.Authentication{Type: "http", SubDomain: "myapp"}, cfgWithHTTPAuth); blocked {
 		t.Fatalf("did not expect modern client to be blocked")
 	}
+
+	if blocked, _ := requiresModernClientForAdvancedFeatures("1.2.1", &client.Authentication{
+		Type: "http",
+		HTTPIngressBasic: &client.HTTPTunnelAuth{Type: "basic", Username: "u", Password: "p"},
+	}, nil); !blocked {
+		t.Fatalf("expected old client to be blocked when client declares HTTP ingress Basic")
+	}
+	if blocked, _ := requiresModernClientForAdvancedFeatures("2.0.0", &client.Authentication{
+		Type: "http",
+		HTTPIngressBasic: &client.HTTPTunnelAuth{Type: "basic", Username: "u", Password: "p"},
+	}, nil); blocked {
+		t.Fatalf("did not expect modern client to be blocked for client ingress auth")
+	}
+}
+
+func TestMergeHTTPIngressEdgeAuth(t *testing.T) {
+	server := []client.HTTPTunnelAuth{{Type: "bearer", Token: "t"}}
+	auth := &client.Authentication{
+		Type: "http",
+		HTTPIngressBasic: &client.HTTPTunnelAuth{
+			Type: "basic", Username: "u", Password: "p",
+		},
+	}
+	got := mergeHTTPIngressEdgeAuth(server, auth)
+	if len(got) != 1 || got[0].Type != "bearer" {
+		t.Fatalf("server auth must win: %+v", got)
+	}
+
+	got = mergeHTTPIngressEdgeAuth(nil, auth)
+	if len(got) != 1 || got[0].Type != "basic" || got[0].Username != "u" || got[0].Password != "p" {
+		t.Fatalf("expected client fallback: %+v", got)
+	}
+
+	got = mergeHTTPIngressEdgeAuth(nil, &client.Authentication{Type: "http"})
+	if len(got) != 0 {
+		t.Fatalf("expected empty without httpIngressBasic: %+v", got)
+	}
 }

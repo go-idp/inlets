@@ -377,6 +377,13 @@ func (c *Client) authenticate() error {
 		Capabilities: capabilities,
 		OpaqueChild:  c.opts.OpaqueChild,
 	}
+	if strings.EqualFold(c.opts.Type, "http") && strings.TrimSpace(c.opts.UpstreamUsername) != "" {
+		auth.HTTPIngressBasic = &HTTPTunnelAuth{
+			Type:     "basic",
+			Username: c.opts.UpstreamUsername,
+			Password: c.opts.UpstreamPassword,
+		}
+	}
 
 	// Send authentication on monitor channel - message format is [type, payload]
 	if err := c.sendMonitorMessage("authenticate", auth); err != nil {

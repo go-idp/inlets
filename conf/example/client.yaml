@@ -2,8 +2,12 @@
 #
 # Use with:
 #   inlets client -c ./conf/example/client.yaml
+#   inlets client -r ... http -s myapp 127.0.0.1:9000
 #
-# You can still override any field from CLI flags/args.
+# You can still override any field from CLI flags. Use subcommands: `http` and `tcp`.
+#
+# CLI overrides for http: `http -s ...`, `--username` / `--password` (env: UPSTREAM_HTTP_*, SUB_DOMAIN on `http`).
+# Username/password apply to your local upstream; when the server tunnel does not configure edge auth, the same Basic is enforced on the public URL (401 until curl sends Authorization).
 
 # Tunnel type: http | tcp
 type: http
@@ -11,8 +15,9 @@ type: http
 # Upstream target (port only or host:port)
 upstream: 127.0.0.1:9000
 
-# For http
-subDomain: myapp
+# HTTP tunnel options (only for type: http)
+http:
+  subDomain: myapp
 
 # For tcp (public tunnel port on server)
 # port: 20100
@@ -39,8 +44,8 @@ legacy: false
 # Usage examples:
 #
 # HTTP Tunnel:
-#   inlets client -r tunnel.example.com:443 -s myapp http 127.0.0.1:9000
-#   inlets client --remote tunnel.example.com:443 --sub-domain myapp http 127.0.0.1:9000
+#   inlets client -r tunnel.example.com:443 http -s myapp 127.0.0.1:9000
+#   inlets client --remote tunnel.example.com:443 http --sub-domain myapp 127.0.0.1:9000
 #
 # TCP Tunnel with Token:
 #   inlets client -r tunnel.example.com:443 -t your-token -p 20100 tcp 127.0.0.1:22
@@ -63,9 +68,6 @@ legacy: false
 #
 #   -p, --port                Custom tunnel port for TCP (env: TUNNEL_PORT)
 #                            Example: 20100
-#
-#   -s, --sub-domain          Custom tunnel sub domain for HTTP (env: SUB_DOMAIN)
-#                            Example: myapp
 #
 #   -t, --token               Authentication token (env: TOKEN)
 #                            Example: your-secret-token
@@ -101,7 +103,7 @@ legacy: false
 #   inlets client -r 127.0.0.1:8080 http 127.0.0.1:9000
 #
 # Production - HTTP tunnel with subdomain:
-#   inlets client -r tunnel.example.com:443 -s myapp -t your-token http 127.0.0.1:9000
+#   inlets client -r tunnel.example.com:443 -t your-token http -s myapp 127.0.0.1:9000
 #
 # SSH tunnel via TCP:
 #   inlets client -r tunnel.example.com:443 --credentials client1:secret1 -p 20100 tcp 127.0.0.1:22

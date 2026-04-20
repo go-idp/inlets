@@ -27,6 +27,7 @@ func main() {
 	var healthcheckInt int = 30000
 	var reportURL string
 	var legacy bool
+	var upstreamUser, upstreamPass string
 
 	// Get defaults from environment
 	if portStr := os.Getenv("TUNNEL_PORT"); portStr != "" {
@@ -55,6 +56,8 @@ func main() {
 	if legacyStr := os.Getenv("LEGACY"); legacyStr != "" {
 		legacy = legacyStr == "true" || legacyStr == "1" || legacyStr == "yes"
 	}
+	upstreamUser = os.Getenv("UPSTREAM_HTTP_USERNAME")
+	upstreamPass = os.Getenv("UPSTREAM_HTTP_PASSWORD")
 
 	// Parse command line arguments to extract flags and positional args
 	var tunnelType string
@@ -112,6 +115,16 @@ func main() {
 			}
 		case "--legacy":
 			legacy = true
+		case "--username":
+			if i+1 < len(os.Args) {
+				upstreamUser = os.Args[i+1]
+				i++
+			}
+		case "--password":
+			if i+1 < len(os.Args) {
+				upstreamPass = os.Args[i+1]
+				i++
+			}
 		case "-v", "--version":
 			fmt.Printf("%s\n", ClientVersion)
 			os.Exit(0)
@@ -199,6 +212,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if tunnelType != "http" {
+		subDomain = ""
+	}
+
 	// Determine protocol version: v2 (2.0.0) by default, v1 (1.2.0) if legacy
 	protocolVersion := "2.0.0"
 	if legacy {
@@ -222,6 +239,10 @@ func main() {
 		ReportURL:      reportURL,
 		Version:        protocolVersion,
 	}
+	if tunnelType == "http" && strings.TrimSpace(upstreamUser) != "" {
+		opts.UpstreamUsername = upstreamUser
+		opts.UpstreamPassword = upstreamPass
+	}
 
 	// Create and run client
 	c := client.New(opts)
@@ -235,11 +256,15 @@ func printHelp() {
 	fmt.Println(`inlets is a cloud native tunnel client that supports HTTP and TCP tunneling.
 
 Usage:
-  inlets-client [type] [upstream] [flags]
+  inlets-client [global flags] http [http options] <upstream>
+  inlets-client [global flags] tcp <upstream>
 
 Examples:
-  # HTTP tunnel
-  inlets-client http 127.0.0.1:9000 -s myapp
+  # HTTP tunnel (--token/--credentials before subcommand; -s on http only)
+  inlets-client -t your-token http -s myapp 127.0.0.1:9000
+
+  # HTTP upstream Basic auth
+  inlets-client http 127.0.0.1:9000 --username admin --password secret
 
   # TCP tunnel
   inlets-client tcp 127.0.0.1:22 -p 20100 -t your-token
@@ -249,7 +274,6 @@ Examples:
 
 Flags:
   -p, --port int                   Custom tunnel port for tcp (env: TUNNEL_PORT)
-  -s, --sub-domain string          Custom tunnel sub domain for http (env: SUB_DOMAIN)
   -t, --token string               Authentication token (env: TOKEN)
       --credentials string         Authentication credentials (clientId:clientSecret) (env: CREDENTIALS)
   -r, --remote string              Server address (env: REMOTE) (default "inlets.zcorky.com:443")
@@ -257,6 +281,9 @@ Flags:
       --healthcheck-interval int   Service health check interval (ms) (env: HEALTHCHECK_INTERVAL) (default 30000)
       --report-url string          Error report url (env: REPORT_URL)
       --legacy                     Use legacy protocol version (v1) (env: LEGACY)
+  -s, --sub-domain string          HTTP tunnel sub domain (only with http; env: SUB_DOMAIN)
+      --username string          HTTP upstream Basic username (http only; env: UPSTREAM_HTTP_USERNAME)
+      --password string          HTTP upstream Basic password (http only; env: UPSTREAM_HTTP_PASSWORD)
   -v, --version                    Print version information and exit
   -h, --help                       help for inlets`)
 }

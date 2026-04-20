@@ -25,6 +25,8 @@ func ChildOptionsFromSpec(base *Options, spec *TunnelSpec) (*Options, error) {
 		Type:                t,
 		UpstreamHost:        host,
 		UpstreamPort:        port,
+		UpstreamUsername:    base.UpstreamUsername,
+		UpstreamPassword:    base.UpstreamPassword,
 		AuthType:            base.AuthType,
 		Token:               base.Token,
 		ClientId:            base.ClientId,

@@ -21,16 +21,44 @@ func requiresModernClientForAdvancedFeatures(authVersion string, auth *client.Au
 	if utils.IsVersionGreaterOrEqual(authVersion, "2.0.0") {
 		return false, ""
 	}
+	var empty client.Config
 	if cfg == nil {
-		return false, ""
+		cfg = &empty
 	}
 	if len(cfg.Tunnels) > 0 {
 		return true, "server tunnels require client >= 2.0.0"
 	}
-	if auth != nil && strings.EqualFold(strings.TrimSpace(auth.Type), "http") && len(resolveMatchedHTTPAuths(auth, cfg)) > 0 {
-		return true, "HTTP auth policy requires client >= 2.0.0"
+	if auth != nil && strings.EqualFold(strings.TrimSpace(auth.Type), "http") {
+		if len(resolveMatchedHTTPAuths(auth, cfg)) > 0 {
+			return true, "HTTP auth policy requires client >= 2.0.0"
+		}
+		if ingressDeclaresBasic(auth) {
+			return true, "HTTP ingress auth from client requires client >= 2.0.0"
+		}
 	}
 	return false, ""
+}
+
+func ingressDeclaresBasic(auth *client.Authentication) bool {
+	if auth == nil || auth.HTTPIngressBasic == nil {
+		return false
+	}
+	b := auth.HTTPIngressBasic
+	return strings.EqualFold(strings.TrimSpace(b.Type), "basic") && strings.TrimSpace(b.Username) != ""
+}
+
+// mergeHTTPIngressEdgeAuth prefers server tunnel edge auth when present; otherwise applies client-declared Basic at the public URL.
+func mergeHTTPIngressEdgeAuth(serverMatched []client.HTTPTunnelAuth, auth *client.Authentication) []client.HTTPTunnelAuth {
+	if len(serverMatched) > 0 {
+		return serverMatched
+	}
+	if !ingressDeclaresBasic(auth) {
+		return nil
+	}
+	b := auth.HTTPIngressBasic
+	return []client.HTTPTunnelAuth{
+		{Type: "basic", Username: b.Username, Password: b.Password},
+	}
 }
 
 func enabledHTTPAuthUsers(spec *client.TunnelSpec) []client.HTTPTunnelAuth {
@@ -216,8 +244,9 @@ func handleAuthenticate(
 	// Create container
 	containerId := uuid.New().String()
 	matchedHTTPAuths := resolveMatchedHTTPAuths(&auth, tokenRes.Config)
+	matchedHTTPAuths = mergeHTTPIngressEdgeAuth(matchedHTTPAuths, &auth)
 	if auth.Type == "http" && len(matchedHTTPAuths) == 0 {
-		logger.Infof("[monitor:ws][%s] no HTTP auths matched for current tunnel", clientId)
+		logger.Infof("[monitor:ws][%s] no HTTP edge auth (server tunnel or client httpIngressBasic)", clientId)
 	}
 
 	// Handle tunnel type
