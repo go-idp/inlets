@@ -17,6 +17,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const publicHTTPNoAuthTimeoutCloseReason = "public http no-auth timeout"
+
 // Client wraps a websocket tunnel session and manages forwarding/heartbeat.
 type Client struct {
 	opts                   *Options
@@ -411,6 +413,11 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 
 		var msgArray []interface{}
 		if err := c.monitorConn.ReadJSON(&msgArray); err != nil {
+			if shouldExitOnPublicHTTPNoAuthTimeoutClose(err) {
+				c.logger.Printf("Monitor channel closed by server due to unauthenticated HTTP tunnel timeout; exiting without reconnect")
+				os.Exit(0)
+			}
+
 			// Check if connection is already being closed (e.g., by ping timeout)
 			c.closingMu.Lock()
 			isClosing := c.closing
@@ -574,6 +581,16 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 			c.logger.Printf("Unhandled monitor event: %s", event)
 		}
 	}
+}
+
+func shouldExitOnPublicHTTPNoAuthTimeoutClose(err error) bool {
+	if err == nil {
+		return false
+	}
+	if closeErr, ok := err.(*websocket.CloseError); ok {
+		return strings.Contains(strings.ToLower(closeErr.Text), publicHTTPNoAuthTimeoutCloseReason)
+	}
+	return strings.Contains(strings.ToLower(err.Error()), publicHTTPNoAuthTimeoutCloseReason)
 }
 
 // handleDataChannel handles messages from a per-stream data channel (only binary TCP data messages)
