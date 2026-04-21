@@ -49,6 +49,12 @@ type ServerConfig struct {
 	Clients         []ClientConfig             `yaml:"clients"`
 	Notification    *client.NotificationConfig `yaml:"notification"`
 	BandwidthLimits *BandwidthLimitsConfig     `yaml:"bandwidthLimits"`
+	PublicHTTPNoAuth *PublicHTTPNoAuthConfig   `yaml:"publicHTTPNoAuth,omitempty"`
+}
+
+type PublicHTTPNoAuthConfig struct {
+	Timeout  string `yaml:"timeout,omitempty"`  // e.g. "10m"
+	WarnLead string `yaml:"warnLead,omitempty"` // e.g. "2m"
 }
 
 // ClientConfig represents a client configuration
@@ -64,6 +70,29 @@ type ClientConfig struct {
 type BandwidthLimitsConfig struct {
 	Global  *limiter.BandwidthLimit            `yaml:"global"`
 	Clients map[string]*limiter.BandwidthLimit `yaml:"clients"`
+}
+
+func resolvePublicHTTPNoAuthTiming(cfg *ServerConfig) (time.Duration, time.Duration) {
+	if cfg == nil || cfg.PublicHTTPNoAuth == nil {
+		return 0, 0
+	}
+	var ttl, warn time.Duration
+	var err error
+	if v := strings.TrimSpace(cfg.PublicHTTPNoAuth.Timeout); v != "" {
+		ttl, err = time.ParseDuration(v)
+		if err != nil {
+			logger.Infof("[server] Warning: invalid publicHTTPNoAuth.timeout %q: %v", v, err)
+			ttl = 0
+		}
+	}
+	if v := strings.TrimSpace(cfg.PublicHTTPNoAuth.WarnLead); v != "" {
+		warn, err = time.ParseDuration(v)
+		if err != nil {
+			logger.Infof("[server] Warning: invalid publicHTTPNoAuth.warnLead %q: %v", v, err)
+			warn = 0
+		}
+	}
+	return ttl, warn
 }
 
 func Server() *cli.Command {
@@ -244,17 +273,20 @@ func Server() *cli.Command {
 
 			// Create GetToken function with config reference
 			getToken := createGetTokenFunctionWithRef(configRef)
+			publicHTTPNoAuthTTL, publicHTTPNoAuthWarnLead := resolvePublicHTTPNoAuthTiming(configFile)
 
 			// Create server options
 			options := server.Options{
-				Version:         ServerVersion,
-				Domain:          serverDomain,
-				Port:            serverPort,
-				TCPPort:         serverTCPPort,
-				Secure:          serverSecure,
-				Token:           getToken,
-				Notification:    notificationConfig,
-				BandwidthLimits: bandwidthLimits,
+				Version:                    ServerVersion,
+				Domain:                     serverDomain,
+				Port:                       serverPort,
+				TCPPort:                    serverTCPPort,
+				Secure:                     serverSecure,
+				Token:                      getToken,
+				Notification:               notificationConfig,
+				BandwidthLimits:            bandwidthLimits,
+				PublicHTTPNoAuthSessionTTL: publicHTTPNoAuthTTL,
+				PublicHTTPNoAuthWarnLeadTime: publicHTTPNoAuthWarnLead,
 			}
 
 			// Create and start server
@@ -604,6 +636,7 @@ func reloadConfig(configPath string, configRef *struct {
 
 	// Create new GetToken function with updated config
 	getToken := createGetTokenFunctionWithRef(configRef)
+	publicHTTPNoAuthTTL, publicHTTPNoAuthWarnLead := resolvePublicHTTPNoAuthTiming(newConfig)
 
 	// Setup notification config
 	var notificationConfig *client.NotificationConfig
@@ -612,7 +645,7 @@ func reloadConfig(configPath string, configRef *struct {
 	}
 
 	// Update server configuration
-	if err := srv.UpdateConfig(getToken, notificationConfig, bandwidthLimits); err != nil {
+	if err := srv.UpdateConfig(getToken, notificationConfig, bandwidthLimits, publicHTTPNoAuthTTL, publicHTTPNoAuthWarnLead); err != nil {
 		logger.Infof("[server:config] Failed to update server configuration: %v", err)
 		return
 	}

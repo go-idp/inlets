@@ -3,6 +3,7 @@ package monitor
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-idp/inlets/internal/client"
 	"github.com/go-idp/inlets/internal/server/notification"
@@ -19,6 +20,12 @@ type CreateWebSocketOptions struct {
 	Secure       bool
 	Token        types.GetToken
 	Notification *Notification
+	// PublicHTTPNoAuthSessionTTL controls automatic close for public HTTP tunnels without edge auth.
+	// Zero means use default (10m).
+	PublicHTTPNoAuthSessionTTL time.Duration
+	// PublicHTTPNoAuthWarnLeadTime controls when to warn clients before the timeout.
+	// Zero means use default (2m).
+	PublicHTTPNoAuthWarnLeadTime time.Duration
 }
 
 // WebSocketConnection represents a WebSocket connection with metadata

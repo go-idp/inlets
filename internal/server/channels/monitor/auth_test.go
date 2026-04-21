@@ -2,11 +2,17 @@ package monitor
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-idp/inlets/internal/client"
 	servercontainer "github.com/go-idp/inlets/internal/server/container"
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/gorilla/websocket"
 )
 
 func TestHandleResponseConsumesCallbackOnce(t *testing.T) {
@@ -178,5 +184,104 @@ func TestMergeHTTPIngressEdgeAuth(t *testing.T) {
 	got = mergeHTTPIngressEdgeAuth(nil, &client.Authentication{Type: "http"})
 	if len(got) != 0 {
 		t.Fatalf("expected empty without httpIngressBasic: %+v", got)
+	}
+}
+
+func TestShouldApplyHTTPNoAuthTTL(t *testing.T) {
+	if !shouldApplyHTTPNoAuthTTL(&client.Authentication{Type: "http"}, nil) {
+		t.Fatalf("expected TTL for http without auth")
+	}
+	if shouldApplyHTTPNoAuthTTL(&client.Authentication{Type: "http"}, []client.HTTPTunnelAuth{{Type: "basic", Username: "u"}}) {
+		t.Fatalf("did not expect TTL when edge auth exists")
+	}
+	if shouldApplyHTTPNoAuthTTL(&client.Authentication{Type: "tcp"}, nil) {
+		t.Fatalf("did not expect TTL for non-http tunnel")
+	}
+	if shouldApplyHTTPNoAuthTTL(nil, nil) {
+		t.Fatalf("did not expect TTL for nil auth")
+	}
+}
+
+func TestResolveHTTPNoAuthTTL(t *testing.T) {
+	ttl, warn := resolveHTTPNoAuthTTL(0, 0)
+	if ttl != 10*time.Minute || warn != 2*time.Minute {
+		t.Fatalf("expected defaults 10m/2m, got %s/%s", ttl, warn)
+	}
+
+	ttl, warn = resolveHTTPNoAuthTTL(15*time.Minute, 5*time.Minute)
+	if ttl != 15*time.Minute || warn != 5*time.Minute {
+		t.Fatalf("expected custom values to be preserved, got %s/%s", ttl, warn)
+	}
+
+	ttl, warn = resolveHTTPNoAuthTTL(90*time.Second, 2*time.Minute)
+	if warn >= ttl {
+		t.Fatalf("warn must be less than ttl, got %s/%s", ttl, warn)
+	}
+}
+
+func TestScheduleHTTPNoAuthTTLWarnAndClose(t *testing.T) {
+	serverConnCh := make(chan *websocket.Conn, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConnCh <- c
+	}))
+	defer s.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(s.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer clientConn.Close()
+
+	var serverConn *websocket.Conn
+	select {
+	case serverConn = <-serverConnCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for upgraded server websocket")
+	}
+	defer serverConn.Close()
+
+	scheduleHTTPNoAuthTTL(&WebSocketConnection{Conn: serverConn}, "client-test", 300*time.Millisecond, 150*time.Millisecond)
+
+	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var warns []string
+	closed := false
+	for i := 0; i < 6; i++ {
+		mt, msg, err := clientConn.ReadMessage()
+		if err != nil {
+			closed = true
+			break
+		}
+		if mt != websocket.TextMessage {
+			continue
+		}
+		var arr []interface{}
+		if err := json.Unmarshal(msg, &arr); err != nil || len(arr) < 2 {
+			continue
+		}
+		event, _ := arr[0].(string)
+		if event != "warn" {
+			continue
+		}
+		warnMsg, _ := arr[1].(string)
+		warns = append(warns, warnMsg)
+	}
+
+	if len(warns) < 2 {
+		t.Fatalf("expected at least 2 warn messages, got %d: %#v", len(warns), warns)
+	}
+	if !strings.Contains(warns[0], "session lifetime") {
+		t.Fatalf("expected first warning to mention lifetime, got %q", warns[0])
+	}
+	if !strings.Contains(warns[1], "will close in") {
+		t.Fatalf("expected second warning to mention lead close warning, got %q", warns[1])
+	}
+	if !closed {
+		t.Fatalf("expected websocket to be closed after ttl")
 	}
 }

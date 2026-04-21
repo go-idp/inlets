@@ -17,6 +17,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	publicHTTPNoAuthSessionTTL          = 10 * time.Minute
+	publicHTTPNoAuthSessionWarnLeadTime = 2 * time.Minute
+)
+
 func requiresModernClientForAdvancedFeatures(authVersion string, auth *client.Authentication, cfg *client.Config) (bool, string) {
 	if utils.IsVersionGreaterOrEqual(authVersion, "2.0.0") {
 		return false, ""
@@ -59,6 +64,61 @@ func mergeHTTPIngressEdgeAuth(serverMatched []client.HTTPTunnelAuth, auth *clien
 	return []client.HTTPTunnelAuth{
 		{Type: "basic", Username: b.Username, Password: b.Password},
 	}
+}
+
+func shouldApplyHTTPNoAuthTTL(auth *client.Authentication, httpAuths []client.HTTPTunnelAuth) bool {
+	if auth == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(auth.Type), "http") && len(httpAuths) == 0
+}
+
+func sendWarnEvent(wsConn *WebSocketConnection, msg string) {
+	event := []interface{}{"warn", msg}
+	b, err := json.Marshal(event)
+	if err != nil {
+		logger.Infof("[monitor:ws] Failed to marshal warn event: %v", err)
+		return
+	}
+	wsConn.writeMu.Lock()
+	err = wsConn.WriteMessage(websocket.TextMessage, b)
+	wsConn.writeMu.Unlock()
+	if err != nil {
+		logger.Infof("[monitor:ws] Failed to send warn event: %v", err)
+	}
+}
+
+func resolveHTTPNoAuthTTL(ttl, warnLead time.Duration) (time.Duration, time.Duration) {
+	if ttl <= 0 {
+		ttl = publicHTTPNoAuthSessionTTL
+	}
+	if warnLead <= 0 {
+		warnLead = publicHTTPNoAuthSessionWarnLeadTime
+	}
+	if warnLead >= ttl {
+		warnLead = ttl / 2
+	}
+	if warnLead <= 0 {
+		warnLead = time.Second
+	}
+	return ttl, warnLead
+}
+
+func scheduleHTTPNoAuthTTL(wsConn *WebSocketConnection, clientID string, ttl, warnLead time.Duration) {
+	ttl, warnLead = resolveHTTPNoAuthTTL(ttl, warnLead)
+	sendWarnEvent(wsConn, fmt.Sprintf("Public HTTP tunnel has no edge auth; session lifetime is %s.", ttl))
+	warnAfter := ttl - warnLead
+	time.AfterFunc(warnAfter, func() {
+		sendWarnEvent(wsConn, fmt.Sprintf("Public HTTP tunnel without edge auth will close in %s.", warnLead))
+	})
+	time.AfterFunc(ttl, func() {
+		sendWarnEvent(wsConn, fmt.Sprintf("Public HTTP tunnel without edge auth reached the %s limit and will now close.", ttl))
+		wsConn.writeMu.Lock()
+		_ = wsConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "public http no-auth timeout"), time.Now().Add(2*time.Second))
+		wsConn.writeMu.Unlock()
+		_ = wsConn.Close()
+		logger.Infof("[monitor:ws][%s] closed unauthenticated HTTP tunnel after %s", clientID, ttl)
+	})
 }
 
 func enabledHTTPAuthUsers(spec *client.TunnelSpec) []client.HTTPTunnelAuth {
@@ -335,6 +395,14 @@ func handleAuthenticate(
 	// Send authentication success response
 	url := getServerUrlBySubDomain(*subDomain, options, wsConn.RequestHost)
 	sendAuthResponse(wsConn, options, true, "", url, config)
+	if shouldApplyHTTPNoAuthTTL(&auth, matchedHTTPAuths) {
+		var ttl, warnLead time.Duration
+		if options != nil {
+			ttl = options.PublicHTTPNoAuthSessionTTL
+			warnLead = options.PublicHTTPNoAuthWarnLeadTime
+		}
+		scheduleHTTPNoAuthTTL(wsConn, clientId, ttl, warnLead)
+	}
 
 	logger.Infof("[monitor:ws][%s] authenticated successfully (container: %s)", clientId, containerId)
 

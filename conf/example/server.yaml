@@ -29,6 +29,14 @@ secure: false
 # This is used for token-based authentication
 token: your-secret-token-here
 
+# Public HTTP tunnel policy when NO edge auth is configured (no tunnel auth and no client http ingress basic):
+# - timeout: close unauthenticated public HTTP tunnels after this duration
+# - warnLead: send client warning this long before close
+# Defaults if omitted: timeout=10m, warnLead=2m
+# publicHTTPNoAuth:
+#   timeout: 2m
+#   warnLead: 1m
+
 # Clients configuration (required)
 # Each client must have a unique clientId and clientSecret
 clients:

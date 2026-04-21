@@ -29,6 +29,12 @@ type Options struct {
 	Token           types.GetToken
 	Notification    *client.NotificationConfig
 	BandwidthLimits *limiter.ClientBandwidthLimits
+	// PublicHTTPNoAuthSessionTTL controls lifetime for HTTP tunnels without edge auth.
+	// Zero means default 10m.
+	PublicHTTPNoAuthSessionTTL time.Duration
+	// PublicHTTPNoAuthWarnLeadTime controls warning lead time before the timeout.
+	// Zero means default 2m.
+	PublicHTTPNoAuthWarnLeadTime time.Duration
 }
 
 // Server represents the main server instance
@@ -132,12 +138,14 @@ func New(options Options) (*Server, error) {
 
 	// Create WebSocket monitor
 	wsMonitor := CreateWebSocketMonitor(ctx, &monitorchannel.CreateWebSocketOptions{
-		Version:      options.Version,
-		Domain:       options.Domain,
-		Port:         port,
-		Secure:       options.Secure,
-		Token:        options.Token,
-		Notification: notification,
+		Version:                     options.Version,
+		Domain:                      options.Domain,
+		Port:                        port,
+		Secure:                      options.Secure,
+		Token:                       options.Token,
+		Notification:                notification,
+		PublicHTTPNoAuthSessionTTL:  options.PublicHTTPNoAuthSessionTTL,
+		PublicHTTPNoAuthWarnLeadTime: options.PublicHTTPNoAuthWarnLeadTime,
 	})
 
 	// Create TCP monitor
@@ -274,10 +282,14 @@ func (s *Server) UpdateConfig(
 	getToken types.GetToken,
 	notificationConfig *client.NotificationConfig,
 	bandwidthLimits *limiter.ClientBandwidthLimits,
+	publicHTTPNoAuthSessionTTL time.Duration,
+	publicHTTPNoAuthWarnLeadTime time.Duration,
 ) error {
 	// Update GetToken function in WebSocket monitor
 	if s.wsMonitor != nil && s.wsMonitor.options != nil {
 		s.wsMonitor.options.Token = getToken
+		s.wsMonitor.options.PublicHTTPNoAuthSessionTTL = publicHTTPNoAuthSessionTTL
+		s.wsMonitor.options.PublicHTTPNoAuthWarnLeadTime = publicHTTPNoAuthWarnLeadTime
 	}
 
 	// Update notification instance
