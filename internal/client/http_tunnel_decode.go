@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+
+	"github.com/go-idp/inlets/internal/legacytunnel"
 )
 
 const (
@@ -19,25 +21,12 @@ const (
 	binaryMessageTypeHTTPResponseBody uint8 = 0x0a
 )
 
-// decodeLegacyHTTPRequestPayload reverses server LegacyProtocolAdapter.encodeRequestData:
-// base64(raw HTTP) -> gzip -> base64; this path does the inverse.
+// decodeLegacyHTTPRequestPayload reverses server legacy tunnel encoding (Brotli outer, gzip fallback,
+// plain base64 for no-op compress). Shared with internal/legacytunnel.
 func decodeLegacyHTTPRequestPayload(data string) ([]byte, error) {
-	compressed, err := base64.StdEncoding.DecodeString(data)
+	raw, err := legacytunnel.DecodePayload(data)
 	if err != nil {
-		return nil, fmt.Errorf("legacy tunnel request: outer base64: %w", err)
-	}
-	gr, err := gzip.NewReader(bytes.NewReader(compressed))
-	if err != nil {
-		return nil, fmt.Errorf("legacy tunnel request: gzip reader: %w", err)
-	}
-	inner, err := io.ReadAll(gr)
-	_ = gr.Close()
-	if err != nil {
-		return nil, fmt.Errorf("legacy tunnel request: gzip read: %w", err)
-	}
-	raw, err := base64.StdEncoding.DecodeString(string(inner))
-	if err != nil {
-		return nil, fmt.Errorf("legacy tunnel request: inner base64: %w", err)
+		return nil, fmt.Errorf("legacy tunnel request: %w", err)
 	}
 	return raw, nil
 }

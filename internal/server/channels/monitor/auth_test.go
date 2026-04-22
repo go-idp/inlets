@@ -47,8 +47,10 @@ func TestHandleResponseConsumesCallbackOnce(t *testing.T) {
 		t.Fatalf("expected callback to be called once, got %d", callCount)
 	}
 
-	if got != payloadData {
-		t.Fatalf("unexpected callback payload: %q", got)
+	// handleResponse normalizes plain base64(raw HTTP) to the same base64 string (see legacytunnel.CallbackWireString).
+	expectedB64 := base64.StdEncoding.EncodeToString([]byte(payloadData))
+	if got != expectedB64 {
+		t.Fatalf("unexpected callback payload: %q want %q", got, expectedB64)
 	}
 }
 

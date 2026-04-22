@@ -8,21 +8,14 @@ import (
 	"testing"
 
 	"github.com/andybalholm/brotli"
+
+	"github.com/go-idp/inlets/internal/legacytunnel"
 )
 
-// legacyEncodeHTTPRequest mirrors server LegacyProtocolAdapter.encodeRequestData (protocol/legacy.go + compression.go).
+// legacyEncodeHTTPRequest mirrors server LegacyProtocolAdapter.encodeRequestData (Brotli outer per zcorky/cliz).
 func legacyEncodeHTTPRequestForTest(raw []byte) (string, error) {
 	innerB64 := base64.StdEncoding.EncodeToString(raw)
-	var gz bytes.Buffer
-	w := gzip.NewWriter(&gz)
-	if _, err := w.Write([]byte(innerB64)); err != nil {
-		_ = w.Close()
-		return "", err
-	}
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(gz.Bytes()), nil
+	return legacytunnel.EncodeOuter(innerB64)
 }
 
 func TestDecodeLegacyHTTPRequestPayload_roundTrip(t *testing.T) {

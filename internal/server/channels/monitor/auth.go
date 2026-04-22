@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/legacytunnel"
 	"github.com/go-idp/inlets/internal/server/protocol"
 	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/go-idp/inlets/internal/server/utils"
@@ -494,19 +495,35 @@ func handleResponse(ctx *types.Context, wsConn *WebSocketConnection, payload int
 			}
 			return
 		}
+		if bm.Type == protocol.MessageTypeHTTPResponse {
+			payload := bm.Data
+			var derr error
+			payload, derr = protocol.DecompressBinaryPayloadForCapabilities(wsConn.Capabilities, payload)
+			if derr != nil {
+				logger.Infof("[monitor:ws] handleResponse: decompress binary HTTP response: %v", derr)
+				return
+			}
+			callback := ctx.CallbackContainer.Take(tcpId, requestId)
+			if callback == nil {
+				logger.Infof("[monitor:ws] handleResponse: no pending tunnel request for id %q", id)
+				return
+			}
+			callback(base64.StdEncoding.EncodeToString(payload))
+			return
+		}
 	}
 
+	payloadStr, err := legacytunnel.CallbackWireString(data)
+	if err != nil {
+		logger.Infof("[monitor:ws] handleResponse: legacy tunnel decode: %v", err)
+		return
+	}
 	callback := ctx.CallbackContainer.Take(tcpId, requestId)
 	if callback == nil {
 		logger.Infof("[monitor:ws] handleResponse: no pending tunnel request for id %q", id)
 		return
 	}
-	decoded, err := base64Decode(data)
-	if err != nil {
-		logger.Infof("[monitor:ws] handleResponse: base64 decode inner: %v", err)
-		return
-	}
-	callback(decoded)
+	callback(payloadStr)
 }
 
 // handleDisconnect handles client disconnect

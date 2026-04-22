@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/go-idp/inlets/internal/legacytunnel"
 	"github.com/gorilla/websocket"
 )
 
@@ -259,68 +260,26 @@ func (a *LegacyProtocolAdapter) Destroy() {
 	// Note: We don't close the connection here as it might be managed elsewhere
 }
 
-// encodeRequestData encodes data for sending request (server side)
-// Process: base64 encode -> compress
+// encodeRequestData encodes data for sending request (server side).
+// Matches zcorky/cliz: inner = base64(raw HTTP UTF-8), outer = base64(brotli(inner UTF-8 bytes)).
+// Older Go peers used gzip; DecodePayload accepts both.
 func (a *LegacyProtocolAdapter) encodeRequestData(data []byte) (string, error) {
-	// Base64 encode
 	base64Data := base64.StdEncoding.EncodeToString(data)
-
-	// Compress (using gzip for legacy protocol)
-	compressed, err := compressGzip(base64Data)
-	if err != nil {
-		return "", err
-	}
-
-	return compressed, nil
+	return legacytunnel.EncodeOuter(base64Data)
 }
 
-// decodeRequestData decodes data received as request (client side)
-// Process: decompress -> base64 decode
+// decodeRequestData decodes data received as request (client side).
 func (a *LegacyProtocolAdapter) decodeRequestData(data string) ([]byte, error) {
-	// Decompress
-	decompressed, err := decompressGzip(data)
-	if err != nil {
-		return nil, err
-	}
-
-	// Base64 decode
-	decoded, err := base64.StdEncoding.DecodeString(decompressed)
-	if err != nil {
-		return nil, err
-	}
-
-	return decoded, nil
+	return legacytunnel.DecodePayload(data)
 }
 
-// encodeResponseData encodes data for sending response (client side)
-// Process: base64 encode -> compress
+// encodeResponseData encodes data for sending response (client side).
 func (a *LegacyProtocolAdapter) encodeResponseData(data []byte) (string, error) {
-	// Base64 encode
 	base64Data := base64.StdEncoding.EncodeToString(data)
-
-	// Compress (using gzip for legacy protocol)
-	compressed, err := compressGzip(base64Data)
-	if err != nil {
-		return "", err
-	}
-
-	return compressed, nil
+	return legacytunnel.EncodeOuter(base64Data)
 }
 
-// decodeResponseData decodes data received as response (server side)
-// Process: decompress -> base64 decode
+// decodeResponseData decodes data received as response (server side).
 func (a *LegacyProtocolAdapter) decodeResponseData(data string) ([]byte, error) {
-	// Decompress
-	decompressed, err := decompressGzip(data)
-	if err != nil {
-		return nil, err
-	}
-
-	// Base64 decode
-	decoded, err := base64.StdEncoding.DecodeString(decompressed)
-	if err != nil {
-		return nil, err
-	}
-
-	return decoded, nil
+	return legacytunnel.DecodePayload(data)
 }
