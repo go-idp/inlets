@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-idp/inlets/internal/legacytunnel"
@@ -16,6 +18,7 @@ type LegacyProtocolAdapter struct {
 	conn                *websocket.Conn
 	connWriteMu         *sync.Mutex // monitor conn write serialization (server)
 	isClient            bool
+	useCompressedOuter  bool // true => base64(brotli(base64(raw))), false => base64(raw)
 	httpRequestHandler  func(id string, data []byte) error
 	httpResponseHandler func(id string, data []byte) error
 	tcpDataHandlers     map[int]func(streamId string, data []byte) error
@@ -26,9 +29,10 @@ type LegacyProtocolAdapter struct {
 // NewLegacyProtocolAdapter creates a new legacy protocol adapter
 func NewLegacyProtocolAdapter(conn *websocket.Conn, isClient bool) *LegacyProtocolAdapter {
 	adapter := &LegacyProtocolAdapter{
-		conn:            conn,
-		isClient:        isClient,
-		tcpDataHandlers: make(map[int]func(streamId string, data []byte) error),
+		conn:               conn,
+		isClient:           isClient,
+		useCompressedOuter: true,
+		tcpDataHandlers:    make(map[int]func(streamId string, data []byte) error),
 	}
 
 	// Don't start event listeners here - let WebSocketMonitor handle message reading
@@ -39,6 +43,13 @@ func NewLegacyProtocolAdapter(conn *websocket.Conn, isClient bool) *LegacyProtoc
 // SetConnWriteMu sets the mutex used to serialize writes on the monitor connection.
 func (a *LegacyProtocolAdapter) SetConnWriteMu(mu *sync.Mutex) {
 	a.connWriteMu = mu
+}
+
+// SetLegacyPeerVersion switches legacy wire encoding to match historical Node client behavior:
+// - < 1.3.0: plain base64(raw HTTP)
+// - >= 1.3.0: base64(brotli(base64(raw HTTP)))
+func (a *LegacyProtocolAdapter) SetLegacyPeerVersion(version string) {
+	a.useCompressedOuter = shouldUseCompressedOuter(version)
 }
 
 func (a *LegacyProtocolAdapter) writeMonitorText(msg []byte) error {
@@ -265,6 +276,9 @@ func (a *LegacyProtocolAdapter) Destroy() {
 // Older Go peers used gzip; DecodePayload accepts both.
 func (a *LegacyProtocolAdapter) encodeRequestData(data []byte) (string, error) {
 	base64Data := base64.StdEncoding.EncodeToString(data)
+	if !a.useCompressedOuter {
+		return base64Data, nil
+	}
 	return legacytunnel.EncodeOuter(base64Data)
 }
 
@@ -276,10 +290,58 @@ func (a *LegacyProtocolAdapter) decodeRequestData(data string) ([]byte, error) {
 // encodeResponseData encodes data for sending response (client side).
 func (a *LegacyProtocolAdapter) encodeResponseData(data []byte) (string, error) {
 	base64Data := base64.StdEncoding.EncodeToString(data)
+	if !a.useCompressedOuter {
+		return base64Data, nil
+	}
 	return legacytunnel.EncodeOuter(base64Data)
 }
 
 // decodeResponseData decodes data received as response (server side).
 func (a *LegacyProtocolAdapter) decodeResponseData(data string) ([]byte, error) {
 	return legacytunnel.DecodePayload(data)
+}
+
+func shouldUseCompressedOuter(version string) bool {
+	major, minor, patch, ok := parseSemver(version)
+	if !ok {
+		// Preserve current default for unknown versions.
+		return true
+	}
+	if major > 1 {
+		return true
+	}
+	if major < 1 {
+		return false
+	}
+	if minor > 3 {
+		return true
+	}
+	if minor < 3 {
+		return false
+	}
+	return patch >= 0
+}
+
+func parseSemver(version string) (int, int, int, bool) {
+	v := strings.TrimSpace(strings.TrimPrefix(version, "v"))
+	if v == "" {
+		return 0, 0, 0, false
+	}
+	// Drop prerelease/build suffixes (e.g. 1.3.0-beta.1+abc)
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return 0, 0, 0, false
+	}
+	nums := []int{0, 0, 0}
+	for i := 0; i < len(parts); i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil || n < 0 {
+			return 0, 0, 0, false
+		}
+		nums[i] = n
+	}
+	return nums[0], nums[1], nums[2], true
 }

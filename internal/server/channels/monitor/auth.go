@@ -297,6 +297,9 @@ func handleAuthenticate(
 
 	// Create protocol adapter
 	adapter := protocol.Create(wsConn.Conn, negotiatedCapabilities, false)
+	if legacyAdapter, ok := adapter.(interface{ SetLegacyPeerVersion(string) }); ok {
+		legacyAdapter.SetLegacyPeerVersion(auth.Version)
+	}
 	adapter.SetConnWriteMu(&wsConn.writeMu)
 	wsConn.mu.Lock()
 	wsConn.Adapter = adapter
