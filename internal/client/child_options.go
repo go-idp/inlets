@@ -33,6 +33,7 @@ func ChildOptionsFromSpec(base *Options, spec *TunnelSpec) (*Options, error) {
 		ClientSecret:        base.ClientSecret,
 		SubDomain:           strings.TrimSpace(spec.SubDomain),
 		Port:                spec.RemotePort,
+		Server:              base.Server,
 		Remote:              base.Remote,
 		RemoteTCPPort:       base.RemoteTCPPort,
 		HealthcheckInt:      base.HealthcheckInt,

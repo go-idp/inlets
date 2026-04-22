@@ -46,6 +46,7 @@ type Options struct {
 	ClientSecret        string
 	SubDomain           string
 	Port                int
+	Server              string
 	Remote              string
 	RemoteTCPPort       int
 	HealthcheckInt      int

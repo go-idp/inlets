@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -37,6 +39,7 @@ type ClientFileConfig struct {
 	Token          string              `yaml:"token"`
 	Credentials    string              `yaml:"credentials"`
 	HTTP           *ClientHTTPConfig   `yaml:"http,omitempty"`
+	Server         string              `yaml:"server"`
 	Remote         string              `yaml:"remote"`
 	RemoteTCPPort  int                 `yaml:"remoteTCPPort"`
 	HealthcheckInt int                 `yaml:"healthcheckInterval"`
@@ -81,6 +84,66 @@ func parseUpstreamArg(upstreamArg string) (string, int, error) {
 	return parts[0], upstreamPort, nil
 }
 
+func parseServerArg(serverArg string) (string, error) {
+	raw := strings.TrimSpace(serverArg)
+	if raw == "" {
+		return "", fmt.Errorf("--server cannot be empty")
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid --server value: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("--server must be a full URL (for example: https://example.com or https://example.com/base)")
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("--server only supports http:// or https:// URLs")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("--server must not include query string or fragment")
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("--server host is required")
+	}
+
+	port := u.Port()
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+
+	path := strings.TrimSuffix(u.EscapedPath(), "/")
+	if path == "/" {
+		path = ""
+	}
+
+	normalized := &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(host, port),
+		Path:   path,
+	}
+
+	return normalized.String(), nil
+}
+
+func validateTransportMode(legacy, serverConfigured, remoteConfigured, remoteTCPConfigured bool) error {
+	if serverConfigured && legacy {
+		return fmt.Errorf("--server only supports v2 protocol; remove --legacy")
+	}
+	if !legacy && (remoteConfigured || remoteTCPConfigured) {
+		return fmt.Errorf("--remote and --remote-tcp-port only support legacy mode; for v2 use --server")
+	}
+	return nil
+}
+
 // resolveClientCtx returns the parent "client" command context (flags: token, credentials, etc.).
 func resolveClientCtx(leaf *cli.Context) *cli.Context {
 	for _, x := range leaf.Lineage() {
@@ -101,6 +164,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	subDomain := ""
 	token := ""
 	credentials := ""
+	server := ""
 	remote := "inlets.zcorky.com:443"
 	remoteTCPPort := 8443
 	healthcheckInt := 30000
@@ -108,6 +172,9 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	legacy := false
 	upstreamUser := ""
 	upstreamPass := ""
+	serverConfigured := false
+	remoteConfigured := false
+	remoteTCPConfigured := false
 
 	configPath := strings.TrimSpace(cc.String("config"))
 	if configPath != "" {
@@ -131,11 +198,17 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		}
 		token = strings.TrimSpace(cfg.Token)
 		credentials = strings.TrimSpace(cfg.Credentials)
+		if strings.TrimSpace(cfg.Server) != "" {
+			server = strings.TrimSpace(cfg.Server)
+			serverConfigured = true
+		}
 		if strings.TrimSpace(cfg.Remote) != "" {
 			remote = strings.TrimSpace(cfg.Remote)
+			remoteConfigured = true
 		}
 		if cfg.RemoteTCPPort > 0 {
 			remoteTCPPort = cfg.RemoteTCPPort
+			remoteTCPConfigured = true
 		}
 		if cfg.HealthcheckInt > 0 {
 			healthcheckInt = cfg.HealthcheckInt
@@ -161,11 +234,17 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if cc.IsSet("credentials") {
 		credentials = cc.String("credentials")
 	}
+	if cc.IsSet("server") {
+		server = cc.String("server")
+		serverConfigured = true
+	}
 	if cc.IsSet("remote") {
 		remote = cc.String("remote")
+		remoteConfigured = true
 	}
 	if cc.IsSet("remote-tcp-port") {
 		remoteTCPPort = cc.Int("remote-tcp-port")
+		remoteTCPConfigured = true
 	}
 	if cc.IsSet("healthcheck-interval") {
 		healthcheckInt = cc.Int("healthcheck-interval")
@@ -175,6 +254,22 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	}
 	if cc.IsSet("legacy") {
 		legacy = cc.Bool("legacy")
+	}
+
+	if serverConfigured {
+		normalizedServer, err := parseServerArg(server)
+		if err != nil {
+			return err
+		}
+		server = normalizedServer
+	}
+	if err := validateTransportMode(legacy, serverConfigured, remoteConfigured, remoteTCPConfigured); err != nil {
+		return err
+	}
+	if !legacy {
+		if !serverConfigured {
+			server = "https://inlets.zcorky.com:443"
+		}
 	}
 
 	switch subcommandType {
@@ -256,6 +351,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		ClientSecret:   clientSecret,
 		SubDomain:      subDomain,
 		Port:           port,
+		Server:         server,
 		Remote:         remote,
 		RemoteTCPPort:  remoteTCPPort,
 		HealthcheckInt: healthcheckInt,
@@ -319,6 +415,9 @@ func Client() *cli.Command {
 		Description: `inlets is a cloud native tunnel client that supports HTTP and TCP tunneling.
 
 Examples:
+  # v2 client via URL-style server endpoint
+  inlets client --server https://tunnel.example.com http -s myapp 127.0.0.1:9000
+
   # HTTP tunnel (-s/--sub-domain belong to the http subcommand)
   inlets client http -s myapp 127.0.0.1:9000
 
@@ -337,7 +436,11 @@ Examples:
   # From config file
   inlets client -c ./conf/example/client.yaml
 
-Note: Global client flags (--token, --credentials, -r, etc.) belong before the subcommand; HTTP-only flags (-s, upstream Basic auth) after "http", e.g. "inlets client -t TOKEN http -s myapp 9000".`,
+Note: Global client flags (--token, --credentials, --server, etc.) belong before the subcommand; HTTP-only flags (-s, upstream Basic auth) after "http", e.g. "inlets client -t TOKEN --server https://tunnel.example.com http -s myapp 9000".
+
+Transport mode note:
+  - v2: use --server (supports http://host:port, http://host, https://host, https://host/path)
+  - legacy: use --remote / --remote-tcp-port with --legacy`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "config",
@@ -362,15 +465,20 @@ Note: Global client flags (--token, --credentials, -r, etc.) belong before the s
 				EnvVars: []string{"CREDENTIALS"},
 			},
 			&cli.StringFlag{
+				Name:    "server",
+				Usage:   "v2 server URL (http/https, optional path) (env: SERVER)",
+				EnvVars: []string{"SERVER"},
+			},
+			&cli.StringFlag{
 				Name:    "remote",
 				Aliases: []string{"r"},
-				Usage:   "Server address (env: REMOTE)",
+				Usage:   "Legacy mode server address host:port (env: REMOTE)",
 				Value:   "inlets.zcorky.com:443",
 				EnvVars: []string{"REMOTE"},
 			},
 			&cli.IntFlag{
 				Name:    "remote-tcp-port",
-				Usage:   "Server tcp port (env: REMOTE_TCP_PORT)",
+				Usage:   "Legacy mode server tcp port (env: REMOTE_TCP_PORT)",
 				Value:   8443,
 				EnvVars: []string{"REMOTE_TCP_PORT"},
 			},

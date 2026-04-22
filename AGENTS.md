@@ -408,3 +408,42 @@ go func() {
 - `internal/server/channels/monitor/auth.go`
 - `internal/client/tunnel_spec_auth.go`（`AuthSnapshotFromOptions`、`ParseUpstream`）、`handlers.go`、`child_options.go`、`client.go`
 - `conf/example/server.yaml`
+
+## 2026-04-22: Client transport mode split (`--server` for v2, `--remote` for legacy)
+
+### Background
+
+The client now supports two explicit transport modes:
+
+1. **v2 mode** uses `--server` as a URL (http/https, optional path prefix).
+2. **legacy mode** uses `--remote` + `--remote-tcp-port` with `--legacy`.
+
+This removes ambiguous combinations and makes websocket endpoint resolution predictable.
+
+### Key changes
+
+1. Added `Options.Server` and normalized `--server` parsing in CLI (`http://host`, `http://host:port/path`, `https://host/path`, etc.).
+2. Introduced mode validation:
+   - `--server` + `--legacy` is rejected.
+   - non-legacy + `--remote`/`--remote-tcp-port` is rejected.
+3. In `--server` mode, 404 on `/_/monitor` no longer falls back to legacy and returns an explicit guidance error.
+4. Added connection target builder tests to verify monitor/data/legacy websocket URLs with and without path prefix.
+5. Updated user-facing docs (`README.md`, `conf/example/client.yaml`) to explain v2 vs legacy usage and examples.
+
+### Review checklist
+
+- [ ] Are `--server` URL variants normalized with default ports and preserved path prefix?
+- [ ] Does `--server` mode avoid implicit legacy fallback on monitor 404?
+- [ ] Are `--remote` and `--remote-tcp-port` used only in legacy mode?
+- [ ] Do docs clearly distinguish v2 (`--server`) from legacy (`--legacy --remote ...`)?
+
+### Related files
+
+- `cmd/inlets/client.go`
+- `cmd/inlets/client_test.go`
+- `internal/client/client.go`
+- `internal/client/client_targets_test.go`
+- `internal/client/types.go`
+- `internal/client/child_options.go`
+- `README.md`
+- `conf/example/client.yaml`

@@ -94,3 +94,79 @@ func TestParseUpstreamArg(t *testing.T) {
 		t.Fatalf("unexpected parse result: %s:%d", host, port)
 	}
 }
+
+func TestParseServerArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "http host and port", input: "http://example.com:8080", want: "http://example.com:8080"},
+		{name: "http host and port with path", input: "http://example.com:8080/base/path", want: "http://example.com:8080/base/path"},
+		{name: "http host default port", input: "http://example.com", want: "http://example.com:80"},
+		{name: "http host default port with path", input: "http://example.com/base/path", want: "http://example.com:80/base/path"},
+		{name: "https host default port", input: "https://example.com", want: "https://example.com:443"},
+		{name: "https host and path", input: "https://example.com/base/path", want: "https://example.com:443/base/path"},
+		{name: "missing scheme", input: "example.com", wantErr: true},
+		{name: "unsupported scheme", input: "ws://example.com", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseServerArg(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseServerArg(%q) returned error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseServerArg(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateTransportMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		legacy            bool
+		serverConfigured  bool
+		remoteConfigured  bool
+		remoteTCPConfigured bool
+		wantErr           bool
+	}{
+		{name: "v2 with server only", legacy: false, serverConfigured: true, wantErr: false},
+		{name: "legacy with remote", legacy: true, remoteConfigured: true, wantErr: false},
+		{name: "legacy with remote tcp port", legacy: true, remoteTCPConfigured: true, wantErr: false},
+		{name: "legacy with server should fail", legacy: true, serverConfigured: true, wantErr: true},
+		{name: "v2 with remote should fail", legacy: false, remoteConfigured: true, wantErr: true},
+		{name: "v2 with remote tcp port should fail", legacy: false, remoteTCPConfigured: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateTransportMode(tt.legacy, tt.serverConfigured, tt.remoteConfigured, tt.remoteTCPConfigured)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+		})
+	}
+}

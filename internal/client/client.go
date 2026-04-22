@@ -61,6 +61,15 @@ type Client struct {
 
 	httpStreamMu   sync.Mutex
 	httpStreamSess map[string]*httpStreamSession
+	targets        connectionTargets
+}
+
+type connectionTargets struct {
+	monitorURL          string
+	legacyURL           string
+	dataBaseURL         string
+	remoteHost          string
+	allowLegacyFallback bool
 }
 
 // New constructs a Client with sane defaults.
@@ -91,22 +100,14 @@ func New(opts *Options) *Client {
 func (c *Client) Run() error {
 	c.logger.Printf("Version: %s", c.opts.Version)
 
-	// Parse remote address
-	remoteParts := strings.Split(c.opts.Remote, ":")
-	if len(remoteParts) != 2 {
-		return fmt.Errorf("invalid remote address format")
+	targets, err := buildConnectionTargets(c.opts)
+	if err != nil {
+		return fmt.Errorf("invalid server configuration: %v", err)
 	}
-	remoteHost := remoteParts[0]
-	remotePort := remoteParts[1]
-
-	// Determine protocol
-	protocol := "ws"
-	if remotePort == "443" {
-		protocol = "wss"
-	}
+	c.targets = targets
 
 	clientWantsV2 := compareVersion(c.opts.Version, "2.0.0") >= 0
-	useNewProtocol, err := c.establishMonitor(protocol, c.opts.Remote, clientWantsV2)
+	useNewProtocol, err := c.establishMonitor(targets, clientWantsV2)
 	if err != nil {
 		return fmt.Errorf("failed to connect monitor channel: %v", err)
 	}
@@ -143,7 +144,7 @@ func (c *Client) Run() error {
 
 	// Handle monitor messages (ping/pong, auth, control, request, tcp:ready, tcp:connect)
 	// Data channel connection will be initiated in handleMonitorMessages after authentication
-	go c.handleMonitorMessages(remoteHost, useNewProtocol)
+	go c.handleMonitorMessages(targets.remoteHost, useNewProtocol)
 
 	// Block forever (monitor and data handlers run in goroutines)
 	select {}
@@ -202,13 +203,12 @@ func monitorDialFailureSummary(wsURL string, err error, resp *http.Response, bod
 
 // establishMonitor connects the monitor WebSocket. For client v2+ it tries /_/monitor first; on HTTP 404
 // it immediately falls back to legacy /_client (older servers). Other errors retry on the v2 path only.
-func (c *Client) establishMonitor(protocol, remoteHostPort string, clientWantsV2 bool) (useSeparated bool, err error) {
-	legacyURL := fmt.Sprintf("%s://%s%s", protocol, remoteHostPort, wsPath)
+func (c *Client) establishMonitor(targets connectionTargets, clientWantsV2 bool) (useSeparated bool, err error) {
 	if !clientWantsV2 {
-		return false, c.connectMonitorChannel(legacyURL)
+		return false, c.connectMonitorChannel(targets.legacyURL)
 	}
 
-	newURL := fmt.Sprintf("%s://%s%s", protocol, remoteHostPort, wsMonitorPath)
+	newURL := targets.monitorURL
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 
 	maxRetries := 1024
@@ -227,8 +227,11 @@ func (c *Client) establishMonitor(protocol, remoteHostPort string, clientWantsV2
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
 			_ = resp.Body.Close()
+			if !targets.allowLegacyFallback {
+				return false, fmt.Errorf("the specified server does not support v2; use --remote and --remote-tcp-port with --legacy")
+			}
 			c.logger.Printf("Server does not appear to be v2 (HTTP 404 on %s); switching to v1 legacy protocol (%s)", wsMonitorPath, wsPath)
-			return false, c.connectMonitorChannel(legacyURL)
+			return false, c.connectMonitorChannel(targets.legacyURL)
 		}
 
 		bodySnippet := ""
@@ -522,25 +525,25 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 					c.logger.Printf("Warning: data:channel:open missing streamId, ignoring")
 					continue
 				}
+				if c.targets.dataBaseURL == "" {
+					c.logger.Printf("Warning: data channel URL base is empty, ignoring stream %s", streamID)
+					continue
+				}
 
-				remoteParts := strings.Split(c.opts.Remote, ":")
-				if len(remoteParts) == 2 {
-					remotePort := remoteParts[1]
-					protocol := "ws"
-					if remotePort == "443" {
-						protocol = "wss"
-					}
-					dataURL := fmt.Sprintf("%s://%s%s?clientId=%s&containerId=%s&streamId=%s", protocol, c.opts.Remote, wsDataPath, c.clientId, c.containerId, streamID)
-					conn, err := c.connectDataChannel(streamID, dataURL)
-					if err != nil {
-						c.logger.Printf("Warning: failed to connect data channel for %s: %v", streamID, err)
-					} else {
-						// Start handling data messages for this stream
-						go c.handleDataChannel(streamID, conn)
-						// Notify server that data channel is ready
-						if err := c.sendMonitorMessage("data:channel:ready", map[string]interface{}{"streamId": streamID}); err != nil {
-							c.logger.Printf("Failed to send data:channel:ready for %s: %v", streamID, err)
-						}
+				query := url.Values{}
+				query.Set("clientId", c.clientId)
+				query.Set("containerId", c.containerId)
+				query.Set("streamId", streamID)
+				dataURL := fmt.Sprintf("%s?%s", c.targets.dataBaseURL, query.Encode())
+				conn, err := c.connectDataChannel(streamID, dataURL)
+				if err != nil {
+					c.logger.Printf("Warning: failed to connect data channel for %s: %v", streamID, err)
+				} else {
+					// Start handling data messages for this stream
+					go c.handleDataChannel(streamID, conn)
+					// Notify server that data channel is ready
+					if err := c.sendMonitorMessage("data:channel:ready", map[string]interface{}{"streamId": streamID}); err != nil {
+						c.logger.Printf("Failed to send data:channel:ready for %s: %v", streamID, err)
 					}
 				}
 			}
@@ -665,28 +668,11 @@ func (c *Client) reconnect() error {
 	}
 	c.closeAllDataChannels()
 
-	// Parse remote address
-	remoteParts := strings.Split(c.opts.Remote, ":")
-	if len(remoteParts) != 2 {
-		return fmt.Errorf("invalid remote address format")
-	}
-	remoteHost := remoteParts[0]
-	remotePort := remoteParts[1]
-
-	// Determine protocol
-	protocol := "ws"
-	if remotePort == "443" {
-		protocol = "wss"
-	}
-
 	useNewProtocol := c.separatedChannels
-	monitorPath := wsPath
+	monitorURL := c.targets.legacyURL
 	if useNewProtocol {
-		monitorPath = wsMonitorPath
+		monitorURL = c.targets.monitorURL
 	}
-
-	// Reconnect monitor channel (same mode as before disconnect)
-	monitorURL := fmt.Sprintf("%s://%s%s", protocol, c.opts.Remote, monitorPath)
 	if err := c.connectMonitorChannel(monitorURL); err != nil {
 		return fmt.Errorf("failed to reconnect monitor channel: %v", err)
 	}
@@ -701,7 +687,7 @@ func (c *Client) reconnect() error {
 	}
 
 	// Handle monitor messages
-	go c.handleMonitorMessages(remoteHost, useNewProtocol)
+	go c.handleMonitorMessages(c.targets.remoteHost, useNewProtocol)
 
 	// Cancel reconnect timeout
 	if c.reconnectTimeout != nil {
@@ -772,4 +758,122 @@ func (c *Client) sendMonitorMessage(event string, payload interface{}) error {
 // sendDataMessage is no longer supported with per-stream data channels
 func (c *Client) sendDataMessage(event string, payload interface{}) error {
 	return fmt.Errorf("sendDataMessage is not supported for per-stream data channels")
+}
+
+func buildConnectionTargets(opts *Options) (connectionTargets, error) {
+	if strings.TrimSpace(opts.Server) != "" {
+		return buildConnectionTargetsFromServer(opts.Server)
+	}
+	return buildConnectionTargetsFromRemote(opts.Remote)
+}
+
+func buildConnectionTargetsFromRemote(remote string) (connectionTargets, error) {
+	trimmedRemote := strings.TrimSpace(remote)
+	if trimmedRemote == "" {
+		return connectionTargets{}, fmt.Errorf("remote address is required")
+	}
+
+	host, port, err := splitRemoteHostPort(trimmedRemote)
+	if err != nil {
+		return connectionTargets{}, fmt.Errorf("invalid remote address format: %w", err)
+	}
+
+	protocol := "ws"
+	if port == "443" {
+		protocol = "wss"
+	}
+
+	return connectionTargets{
+		monitorURL:          fmt.Sprintf("%s://%s%s", protocol, trimmedRemote, wsMonitorPath),
+		legacyURL:           fmt.Sprintf("%s://%s%s", protocol, trimmedRemote, wsPath),
+		dataBaseURL:         fmt.Sprintf("%s://%s%s", protocol, trimmedRemote, wsDataPath),
+		remoteHost:          host,
+		allowLegacyFallback: true,
+	}, nil
+}
+
+func buildConnectionTargetsFromServer(serverRaw string) (connectionTargets, error) {
+	server := strings.TrimSpace(serverRaw)
+	if server == "" {
+		return connectionTargets{}, fmt.Errorf("server URL is required")
+	}
+
+	u, err := url.Parse(server)
+	if err != nil {
+		return connectionTargets{}, fmt.Errorf("invalid server URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return connectionTargets{}, fmt.Errorf("server URL must include scheme and host")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return connectionTargets{}, fmt.Errorf("server URL must not include query string or fragment")
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	wsScheme := ""
+	switch scheme {
+	case "http":
+		wsScheme = "ws"
+	case "https":
+		wsScheme = "wss"
+	case "ws", "wss":
+		wsScheme = scheme
+	default:
+		return connectionTargets{}, fmt.Errorf("unsupported server URL scheme %q", u.Scheme)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return connectionTargets{}, fmt.Errorf("server URL host is required")
+	}
+
+	port := u.Port()
+	if port == "" {
+		switch scheme {
+		case "http", "ws":
+			port = "80"
+		default:
+			port = "443"
+		}
+	}
+
+	prefix := strings.TrimSuffix(u.EscapedPath(), "/")
+	if prefix == "/" {
+		prefix = ""
+	}
+
+	hostPort := net.JoinHostPort(host, port)
+	base := fmt.Sprintf("%s://%s", wsScheme, hostPort)
+
+	return connectionTargets{
+		monitorURL:          base + joinURLPath(prefix, wsMonitorPath),
+		legacyURL:           base + joinURLPath(prefix, wsPath),
+		dataBaseURL:         base + joinURLPath(prefix, wsDataPath),
+		remoteHost:          host,
+		allowLegacyFallback: false,
+	}, nil
+}
+
+func joinURLPath(prefix, suffix string) string {
+	trimmedPrefix := strings.TrimSuffix(prefix, "/")
+	if trimmedPrefix == "" {
+		return suffix
+	}
+	if !strings.HasPrefix(trimmedPrefix, "/") {
+		trimmedPrefix = "/" + trimmedPrefix
+	}
+	return trimmedPrefix + suffix
+}
+
+func splitRemoteHostPort(remote string) (string, string, error) {
+	host, port, err := net.SplitHostPort(remote)
+	if err == nil {
+		return host, port, nil
+	}
+	// Keep backward compatibility with host:port values that were historically parsed by split.
+	parts := strings.Split(remote, ":")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return parts[0], parts[1], nil
+	}
+	return "", "", err
 }

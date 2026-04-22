@@ -2,7 +2,7 @@
 #
 # Use with:
 #   inlets client -c ./conf/example/client.yaml
-#   inlets client -r ... http -s myapp 127.0.0.1:9000
+#   inlets client --server https://tunnel.example.com http -s myapp 127.0.0.1:9000
 #
 # You can still override any field from CLI flags. Use subcommands: `http` and `tcp`.
 #
@@ -26,7 +26,10 @@ http:
 credentials: client1:secret1
 # token: your-secret-token
 
-# Server endpoint
+# Server endpoint (v2 mode, default)
+server: https://inlets.zcorky.com:443
+
+# Legacy mode endpoints (used only with legacy: true)
 remote: 127.0.0.1:8080
 remoteTCPPort: 8443
 
@@ -44,8 +47,8 @@ legacy: false
 # Usage examples:
 #
 # HTTP Tunnel:
-#   inlets client -r tunnel.example.com:443 http -s myapp 127.0.0.1:9000
-#   inlets client --remote tunnel.example.com:443 http --sub-domain myapp 127.0.0.1:9000
+#   inlets client --server https://tunnel.example.com http -s myapp 127.0.0.1:9000
+#   inlets client --server https://tunnel.example.com/base http --sub-domain myapp 127.0.0.1:9000
 #
 # TCP Tunnel with Token:
 #   inlets client -r tunnel.example.com:443 -t your-token -p 20100 tcp 127.0.0.1:22
@@ -63,8 +66,11 @@ legacy: false
 #   [upstream]     - Upstream address: port (e.g., 9000) or hostname:port (e.g., 127.0.0.1:9000)
 #
 # Optional Flags:
-#   -r, --remote              Server address (default: inlets.zcorky.com:443)
-#                            Example: tunnel.example.com:443
+#   --server                  v2 server URL (http/https, optional path) (env: SERVER)
+#                            Example: https://tunnel.example.com/base
+#
+#   -r, --remote              Legacy server address (default: inlets.zcorky.com:443)
+#                            Example: tunnel.example.com:443 (legacy mode)
 #
 #   -p, --port                Custom tunnel port for TCP (env: TUNNEL_PORT)
 #                            Example: 20100
@@ -75,8 +81,8 @@ legacy: false
 #   --credentials             Authentication credentials in format clientId:clientSecret (env: CREDENTIALS)
 #                            Example: client1:secret1
 #
-#   --remote-tcp-port         Server TCP port (default: 8443, env: REMOTE_TCP_PORT)
-#                            Example: 8443
+#   --remote-tcp-port         Legacy server TCP port (default: 8443, env: REMOTE_TCP_PORT)
+#                            Example: 8443 (legacy mode)
 #
 #   --healthcheck-interval    Service health check interval in milliseconds (default: 30000, env: HEALTHCHECK_INTERVAL)
 #                            Example: 30000
@@ -84,7 +90,7 @@ legacy: false
 #   --report-url              Error report URL (env: REPORT_URL)
 #                            Example: https://api.example.com/report
 #
-#   --legacy                  Use legacy protocol version (v1) instead of v2 (env: LEGACY)
+#   --legacy                  Use legacy protocol version (v1); required when using --remote / --remote-tcp-port (env: LEGACY)
 #                            Example: false
 #
 # Authentication Types:

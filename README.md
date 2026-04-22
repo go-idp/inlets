@@ -127,15 +127,15 @@ inlets -V
 
 ```bash
 # Use latest protocol version (default v2, supports capability negotiation)
-inlets client http 127.0.0.1:9000
+inlets client --server https://tunnel.example.com http 127.0.0.1:9000
 
 # Use legacy protocol version (legacy mode, v1)
-inlets client --legacy http 127.0.0.1:9000
+inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 ```
 
 **Protocol Version Notes:**
-- **Default (v2 / 2.0.0)**: Supports new protocol, client sends capabilities for negotiation, server returns negotiated protocol configuration
-- **Legacy (v1 / 1.2.0)**: Uses legacy protocol, doesn't send capabilities, fully compatible with older server versions
+- **Default (v2 / 2.0.0)**: Use `--server` (HTTP/HTTPS URL). The client sends capabilities for negotiation and expects the v2 monitor endpoint.
+- **Legacy (v1 / 1.2.0)**: Use `--legacy` with `--remote` and `--remote-tcp-port`. This mode is compatible with older server versions.
 
 #### Client Common Parameters
 
@@ -147,8 +147,9 @@ inlets client --legacy http 127.0.0.1:9000
 | `-p, --port` | TCP tunnel port | |
 | `-t, --token` | Token authentication | |
 | `--credentials` | `clientId:clientSecret` | |
-| `-r, --remote` | Server address | `inlets.zcorky.com:443` |
-| `--remote-tcp-port` | Server TCP callback port | `8443` |
+| `--server` | v2 server URL (`http://` or `https://`, optional path) | `https://inlets.zcorky.com:443` |
+| `-r, --remote` | Legacy server address (`host:port`) | `inlets.zcorky.com:443` |
+| `--remote-tcp-port` | Legacy server TCP callback port | `8443` |
 | `--healthcheck-interval` | Authentication timeout / health check interval (ms) | `30000` |
 | `--legacy` | Use legacy protocol version (v1) | `false` (default v2) |
 | `--report-url` | Error report webhook | |
@@ -161,8 +162,9 @@ All parameters can be configured via environment variables. Environment variable
 - `SUB_DOMAIN`: HTTP custom subdomain
 - `TOKEN`: Token authentication
 - `CREDENTIALS`: Authentication credentials (clientId:clientSecret)
-- `REMOTE`: Server address (default: `inlets.zcorky.com:443`)
-- `REMOTE_TCP_PORT`: Server TCP callback port (default: `8443`)
+- `SERVER`: v2 server URL (default: `https://inlets.zcorky.com:443`)
+- `REMOTE`: Legacy server address (default: `inlets.zcorky.com:443`)
+- `REMOTE_TCP_PORT`: Legacy server TCP callback port (default: `8443`)
 - `HEALTHCHECK_INTERVAL`: Health check interval (ms, default: `30000`)
 - `REPORT_URL`: Error report webhook
 - `LEGACY`: Use legacy protocol version (set to `true`, `1`, or `yes` to enable)
@@ -255,13 +257,19 @@ inlets forward -s 0.0.0.0:8080 -t 127.0.0.1:3000
 
 ```bash
 # Development environment connecting to local server
-inlets client -r 127.0.0.1:8080 http 127.0.0.1:9000
+inlets client --server http://127.0.0.1:8080 http 127.0.0.1:9000
+
+# v2 server URL with base path prefix
+inlets client --server https://tunnel.example.com/base http -s myapp 127.0.0.1:9000
 
 # Production SSH tunnel
 inlets client --credentials prod:secret -p 20100 tcp 127.0.0.1:22
 
 # HTTP tunnel with custom subdomain
 inlets client -s myapp -t token http 127.0.0.1:9000
+
+# Legacy mode example
+inlets client --legacy --remote tunnel.example.com:443 --remote-tcp-port 8443 http 127.0.0.1:9000
 ```
 
 ### Server Examples
