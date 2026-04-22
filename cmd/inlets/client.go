@@ -268,7 +268,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	}
 	if !legacy {
 		if !serverConfigured {
-			server = "https://inlets.zcorky.com:443"
+			server = "https://inlets.zcorky.com"
 		}
 	}
 
@@ -380,7 +380,6 @@ func Client() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "sub-domain",
-				Aliases: []string{"s"},
 				Usage:   "Public HTTP tunnel sub domain (env: SUB_DOMAIN)",
 				EnvVars: []string{"SUB_DOMAIN"},
 			},
@@ -416,10 +415,10 @@ func Client() *cli.Command {
 
 Examples:
   # v2 client via URL-style server endpoint
-  inlets client --server https://tunnel.example.com http -s myapp 127.0.0.1:9000
+  inlets client -s https://tunnel.example.com http --sub-domain myapp 127.0.0.1:9000
 
-  # HTTP tunnel (-s/--sub-domain belong to the http subcommand)
-  inlets client http -s myapp 127.0.0.1:9000
+  # HTTP tunnel (--sub-domain belongs to the http subcommand)
+  inlets client http --sub-domain myapp 127.0.0.1:9000
 
   # HTTP upstream Basic auth
   inlets client http 127.0.0.1:9000 --username admin --password secret
@@ -436,7 +435,7 @@ Examples:
   # From config file
   inlets client -c ./conf/example/client.yaml
 
-Note: Global client flags (--token, --credentials, --server, etc.) belong before the subcommand; HTTP-only flags (-s, upstream Basic auth) after "http", e.g. "inlets client -t TOKEN --server https://tunnel.example.com http -s myapp 9000".
+Note: Global client flags (--token, --credentials, -s/--server, etc.) belong before the subcommand; HTTP-only flags (--sub-domain, upstream Basic auth) after "http", e.g. "inlets client -t TOKEN -s https://tunnel.example.com http --sub-domain myapp 9000".
 
 Transport mode note:
   - v2: use --server (supports http://host:port, http://host, https://host, https://host/path)
@@ -466,7 +465,9 @@ Transport mode note:
 			},
 			&cli.StringFlag{
 				Name:    "server",
+				Aliases: []string{"s"},
 				Usage:   "v2 server URL (http/https, optional path) (env: SERVER)",
+				Value:   "https://inlets.zcorky.com",
 				EnvVars: []string{"SERVER"},
 			},
 			&cli.StringFlag{

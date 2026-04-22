@@ -2,7 +2,7 @@
 #
 # Use with:
 #   inlets client -c ./conf/example/client.yaml
-#   inlets client --server https://tunnel.example.com http -s myapp 127.0.0.1:9000
+#   inlets client --server https://tunnel.example.com http --sub-domain myapp 127.0.0.1:9000
 #
 # You can still override any field from CLI flags. Use subcommands: `http` and `tcp`.
 #
@@ -27,16 +27,17 @@ credentials: client1:secret1
 # token: your-secret-token
 
 # Server endpoint (v2 mode, default)
-server: https://inlets.zcorky.com:443
+server: http://127.0.0.1:8080
 
 # Legacy mode endpoints (used only with legacy: true)
-remote: 127.0.0.1:8080
-remoteTCPPort: 8443
+# remote: 127.0.0.1:8080
+# remoteTCPPort: 8443
+# legacy: false
 
 # Runtime options
 healthcheckInterval: 30000
 # reportURL: https://example.com/report
-legacy: false
+
 # Inlets Client Configuration Example
 #
 # NOTE: Currently, the inlets client uses command-line arguments for configuration.
@@ -47,7 +48,7 @@ legacy: false
 # Usage examples:
 #
 # HTTP Tunnel:
-#   inlets client --server https://tunnel.example.com http -s myapp 127.0.0.1:9000
+#   inlets client --server https://tunnel.example.com http --sub-domain myapp 127.0.0.1:9000
 #   inlets client --server https://tunnel.example.com/base http --sub-domain myapp 127.0.0.1:9000
 #
 # TCP Tunnel with Token:
@@ -109,7 +110,7 @@ legacy: false
 #   inlets client -r 127.0.0.1:8080 http 127.0.0.1:9000
 #
 # Production - HTTP tunnel with subdomain:
-#   inlets client -r tunnel.example.com:443 -t your-token http -s myapp 127.0.0.1:9000
+#   inlets client -r tunnel.example.com:443 -t your-token http --sub-domain myapp 127.0.0.1:9000
 #
 # SSH tunnel via TCP:
 #   inlets client -r tunnel.example.com:443 --credentials client1:secret1 -p 20100 tcp 127.0.0.1:22

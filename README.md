@@ -101,7 +101,7 @@ go build -o inlets cmd/inlets/inlets.go
 inlets client http 127.0.0.1:9000
 
 # Specify subdomain + token
-inlets client -s myapp -t token http 127.0.0.1:9000
+inlets client --sub-domain myapp -t token http 127.0.0.1:9000
 ```
 
 #### TCP Tunnel
@@ -143,11 +143,11 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 | --- | --- | --- |
 | `type` | Tunnel type `http` / `tcp` | Required |
 | `upstream` | Local upstream, port or `host:port` | Required |
-| `-s, --sub-domain` | HTTP custom subdomain | |
+| `--sub-domain` | HTTP custom subdomain (http subcommand only) | |
 | `-p, --port` | TCP tunnel port | |
 | `-t, --token` | Token authentication | |
 | `--credentials` | `clientId:clientSecret` | |
-| `--server` | v2 server URL (`http://` or `https://`, optional path) | `https://inlets.zcorky.com:443` |
+| `--server` | v2 server URL (`http://` or `https://`, optional path) | `https://inlets.zcorky.com` |
 | `-r, --remote` | Legacy server address (`host:port`) | `inlets.zcorky.com:443` |
 | `--remote-tcp-port` | Legacy server TCP callback port | `8443` |
 | `--healthcheck-interval` | Authentication timeout / health check interval (ms) | `30000` |
@@ -162,7 +162,7 @@ All parameters can be configured via environment variables. Environment variable
 - `SUB_DOMAIN`: HTTP custom subdomain
 - `TOKEN`: Token authentication
 - `CREDENTIALS`: Authentication credentials (clientId:clientSecret)
-- `SERVER`: v2 server URL (default: `https://inlets.zcorky.com:443`)
+- `SERVER`: v2 server URL (default: `https://inlets.zcorky.com`)
 - `REMOTE`: Legacy server address (default: `inlets.zcorky.com:443`)
 - `REMOTE_TCP_PORT`: Legacy server TCP callback port (default: `8443`)
 - `HEALTHCHECK_INTERVAL`: Health check interval (ms, default: `30000`)
@@ -260,13 +260,13 @@ inlets forward -s 0.0.0.0:8080 -t 127.0.0.1:3000
 inlets client --server http://127.0.0.1:8080 http 127.0.0.1:9000
 
 # v2 server URL with base path prefix
-inlets client --server https://tunnel.example.com/base http -s myapp 127.0.0.1:9000
+inlets client --server https://tunnel.example.com/base http --sub-domain myapp 127.0.0.1:9000
 
 # Production SSH tunnel
 inlets client --credentials prod:secret -p 20100 tcp 127.0.0.1:22
 
 # HTTP tunnel with custom subdomain
-inlets client -s myapp -t token http 127.0.0.1:9000
+inlets client --sub-domain myapp -t token http 127.0.0.1:9000
 
 # Legacy mode example
 inlets client --legacy --remote tunnel.example.com:443 --remote-tcp-port 8443 http 127.0.0.1:9000

@@ -3,7 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/urfave/cli/v2"
 )
 
 func TestLoadClientConfig(t *testing.T) {
@@ -168,5 +171,22 @@ func TestValidateTransportMode(t *testing.T) {
 				t.Fatalf("expected nil error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestSubDomainFlagMustFollowHTTPSubcommand(t *testing.T) {
+	t.Parallel()
+
+	app := &cli.App{
+		Name:     "inlets",
+		Commands: []*cli.Command{Client()},
+	}
+
+	err := app.Run([]string{"inlets", "client", "--sub-domain", "myapp", "http", "127.0.0.1:9000"})
+	if err == nil {
+		t.Fatalf("expected parse error for client-level --sub-domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "sub-domain") {
+		t.Fatalf("expected sub-domain parse error, got: %v", err)
 	}
 }
