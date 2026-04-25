@@ -6,12 +6,10 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +20,10 @@ import (
 )
 
 const upstreamRequestTimeout = 60 * time.Second
+
+// maxUpBufferedResponse caps in-memory buffering for non-chunked upstream HTTP responses in the
+// streaming tunnel path. Chunked encoding uses the dechunker stream instead of ReadAll.
+const maxUpBufferedResponse = 10 << 20
 
 const messageFlagFIN = 0x01
 
@@ -367,55 +369,52 @@ func (c *Client) readUpstreamAndStreamHTTPResponse(id string, upstream net.Conn,
 	}
 	defer resp.Body.Close()
 
-	headBytes, err := httputil.DumpResponse(resp, false)
+	// Read full body (net/http de-chunks). We re-frame headers to drop Transfer-Encoding: chunked
+	// and set Content-Length so the browser never sees chunked framing with de-chunked bytes.
+	bodySlurp, err := io.ReadAll(io.LimitReader(resp.Body, maxUpBufferedResponse+1))
 	if err != nil {
-		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "failed to serialize upstream response")
+		c.logger.Printf("[tunnel:http] id=%s read upstream body: %v", id, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "upstream read failed: body")
 		return
 	}
-
-	respCL := resp.ContentLength
-	headFin := respCL == 0
-	if len(resp.TransferEncoding) > 0 {
-		headFin = false
-	}
-	if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseHead, id, headBytes, headFin); err != nil {
-		c.logger.Printf("[tunnel:http] id=%s send response head failed: %v", id, err)
+	if len(bodySlurp) > maxUpBufferedResponse {
+		c.logger.Printf("[tunnel:http] id=%s upstream body exceeds max buffer", id)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "upstream response too large for tunnel")
 		return
 	}
-	if headFin {
+	headBytes, err := responseHeadForBufferedUpstreamBody(resp, bodySlurp)
+	if err != nil {
+		c.logger.Printf("[tunnel:http] id=%s build response head: %v", id, err)
+		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, "failed to frame upstream response")
+		return
+	}
+	if len(bodySlurp) == 0 {
+		if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseHead, id, headBytes, true); err != nil {
+			c.logger.Printf("[tunnel:http] id=%s send response head failed: %v", id, err)
+			return
+		}
 		c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
 		return
 	}
-
-	buf := make([]byte, 32*1024)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			fin := errors.Is(rerr, io.EOF)
-			if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseBody, id, buf[:n], fin); err != nil {
-				c.logger.Printf("[tunnel:http] id=%s send response body failed: %v", id, err)
-				return
-			}
-			if fin {
-				c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
-				return
-			}
+	if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseHead, id, headBytes, false); err != nil {
+		c.logger.Printf("[tunnel:http] id=%s send response head failed: %v", id, err)
+		return
+	}
+	const chunk = 32 * 1024
+	for off := 0; off < len(bodySlurp); {
+		end := off + chunk
+		if end > len(bodySlurp) {
+			end = len(bodySlurp)
 		}
-		if rerr == io.EOF {
-			if n == 0 {
-				if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseBody, id, nil, true); err != nil {
-					c.logger.Printf("[tunnel:http] id=%s send final body failed: %v", id, err)
-					return
-				}
-			}
-			c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
-			return
-		}
-		if rerr != nil {
-			c.logger.Printf("[tunnel:http] id=%s read body: %v", id, rerr)
+		piece := bodySlurp[off:end]
+		off = end
+		fin := off >= len(bodySlurp)
+		if err := c.sendSemanticHTTPResponse(binaryMessageTypeHTTPResponseBody, id, piece, fin); err != nil {
+			c.logger.Printf("[tunnel:http] id=%s send response body failed: %v", id, err)
 			return
 		}
 	}
+	c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
 }
 
 func (c *Client) forwardHTTPRequest(id string, data string) {

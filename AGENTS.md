@@ -466,3 +466,44 @@ A session time limit for **temporary** control-plane logins (monitor `authType` 
 - `internal/client/client.go`, `monitor_close_test.go`  
 - `conf/example/server.yaml`  
 - `docs/features/PUBLIC_MONITOR_SESSION.md`
+
+## 2026-04-25: HTTP tunnel — empty 401 without Content-Length (browser stuck “pending”)
+
+### Symptom
+
+Upstream returns `401` with `WWW-Authenticate` but **no** `Content-Length` / `Transfer-Encoding`, `Connection: keep-alive`, empty body. Client logs `-> 401 Unauthorized` but the browser tab stays loading and may not show Basic auth.
+
+### Root cause
+
+RFC 7230: without `Content-Length` or `Transfer-Encoding`, the end of the message is undefined unless the connection closes. Forwarding only header bytes on a keep-alive hijacked socket looks like an **incomplete** response; the browser waits for more bytes.
+
+### Fix
+
+For **non-chunked** upstream responses, buffer the body (bounded), and if empty, run `insertContentLength0IfUnframedEmpty` on the dumped head so the wire includes `Content-Length: 0` when headers lack framing. Chunked encoding still uses the streaming `resp.Body` reader.
+
+### Related files
+
+- `internal/client/http1_response_framing.go`, `http1_response_framing_test.go`  
+- `internal/client/handlers.go` — `readUpstreamAndStreamHTTPResponse`
+
+## 2026-04-25: Chunked 401 from upstream — de-chunked bytes vs `Transfer-Encoding: chunked` in headers
+
+### Symptom
+
+`curl` received status + `Transfer-Encoding: chunked` then **timed out with 0 body bytes**; client log already showed `-> 401`. Typical with **go-zoox-ingress** or similar.
+
+### Root cause
+
+For upstream **chunked** responses, the client’s tunnel path was sending **de-chunked** body bytes to the browser while the serialized **head still contained** `Transfer-Encoding: chunked`. The peer’s chunked decoder then waits for valid chunk **terminators** that never come.
+
+### Fix
+
+`readUpstreamAndStreamHTTPResponse` always `ReadAll`s the body (bounded), then `responseHeadForBufferedUpstreamBody` strips `Transfer-Encoding`, sets `Content-Length` to the buffered length, and re-dumps the head with `httputil.DumpResponse` before sending head/body frames. For an **empty** body (e.g. 401 with no content), it also sets **`Connection: close`** so reverse proxies that mis-handle keep-alive + framing still complete the message.
+
+**Deploy**: Browsers/curl will keep seeing the old `Transfer-Encoding: chunked` hang until the **inlets client** process is rebuilt from this code and restarted; the server binary alone does not apply this logic.
+
+### Related files
+
+- `internal/client/http1_response_framing.go` — `responseHeadForBufferedUpstreamBody`  
+- `internal/client/handlers.go`  
+- `internal/client/http1_response_framing_test.go` — `TestResponseHeadForBufferedUpstreamBodyStripsChunked`
