@@ -207,7 +207,7 @@ func (t *TCPTunnel) handleSourceConnection(
 			return
 		}
 		// New protocol: TCP over WebSocket
-		t.setupTCPStreamOverWebSocket(containerID, streamID, conn, adapter, container.WSSocket)
+		t.setupTCPStreamOverWebSocket(containerID, streamID, conn, adapter, container.WSSocket, nil)
 	}
 
 	// Notify client to connect
@@ -348,6 +348,7 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 	sourceConn net.Conn,
 	adapter protocol.ProtocolAdapter,
 	wsConn *websocket.Conn,
+	onRelayComplete func(),
 ) {
 	// Get clientId for statistics
 	container := t.ctx.Container.Get(containerID)
@@ -379,6 +380,10 @@ func (t *TCPTunnel) setupTCPStreamOverWebSocket(
 				unsubscribeClose()
 			}
 			sourceConn.Close()
+
+			if onRelayComplete != nil {
+				onRelayComplete()
+			}
 
 			statsInfo := t.ctx.TrafficStats.FormatStats(clientID)
 			logger.Infof("[tunnel:tcp   ][%s] connection closed - Traffic Stats: %s", streamID, statsInfo)

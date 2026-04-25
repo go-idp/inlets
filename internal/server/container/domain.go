@@ -61,11 +61,11 @@ func (c *domainContainer) Has(id string) bool {
 // BindWS binds a WebSocket connection to a subdomain
 // If subDomain is empty, generates a short UUID
 func (c *domainContainer) BindWS(wsSocket *websocket.Conn, subDomain string) string {
-	return c.BindWSWithMetadata(wsSocket, subDomain, "", nil, false, nil)
+	return c.BindWSWithMetadata(wsSocket, subDomain, "", nil, false, nil, "")
 }
 
 // BindWSWithMetadata binds a WebSocket connection to a subdomain with metadata
-func (c *domainContainer) BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool, httpAuths []client.HTTPTunnelAuth) string {
+func (c *domainContainer) BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool, httpAuths []client.HTTPTunnelAuth, containerID string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -80,6 +80,7 @@ func (c *domainContainer) BindWSWithMetadata(wsSocket *websocket.Conn, subDomain
 
 	c.hosts[uid] = &types.DomainMapping{
 		WSSocket:       wsSocket,
+		ContainerID:    containerID,
 		ClientID:       clientID,
 		HTTPAuths:      append([]client.HTTPTunnelAuth(nil), httpAuths...),
 		Adapter:        adapter,

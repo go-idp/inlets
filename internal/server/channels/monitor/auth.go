@@ -340,17 +340,26 @@ func handleAuthenticate(
 		}
 
 	} else if auth.Type == "http" {
-		// HTTP tunnel
+		// HTTP tunnel: also create a tunnel container so per-stream /_/data can attach (TCP over WS for WebSocket upgrades).
+		ctx.Container.Create(containerId, options.Token, wsConn.Conn, &auth, &wsConn.writeMu)
+
 		wsConn.mu.RLock()
 		adapter := wsConn.Adapter
 		useNewProtocol := wsConn.UseNewProtocol
 		wsConn.mu.RUnlock()
 
+		if err := ctx.Container.Set(containerId, "adapter", adapter); err != nil {
+			logger.Infof("[monitor:ws] HTTP tunnel: failed to set adapter: %v", err)
+		}
+		if err := ctx.Container.Set(containerId, "useNewProtocol", useNewProtocol); err != nil {
+			logger.Infof("[monitor:ws] HTTP tunnel: failed to set useNewProtocol: %v", err)
+		}
+
 		if domainContainer, ok := ctx.DomainMappings.(interface {
-			BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool, httpAuths []client.HTTPTunnelAuth) string
+			BindWSWithMetadata(wsSocket *websocket.Conn, subDomain string, clientID string, adapter interface{}, useNewProtocol bool, httpAuths []client.HTTPTunnelAuth, containerID string) string
 		}); ok {
 			if auth.SubDomain == "" {
-				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, "", clientId, adapter, useNewProtocol, matchedHTTPAuths)
+				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, "", clientId, adapter, useNewProtocol, matchedHTTPAuths, containerId)
 			} else {
 				logger.Infof("[monitor:ws][%s][domain] request: %s.%s", clientId, auth.SubDomain, options.Domain)
 
@@ -359,7 +368,7 @@ func handleAuthenticate(
 					return fmt.Errorf("subdomain already used")
 				}
 
-				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, auth.SubDomain, clientId, adapter, useNewProtocol, matchedHTTPAuths)
+				*subDomain = domainContainer.BindWSWithMetadata(wsConn.Conn, auth.SubDomain, clientId, adapter, useNewProtocol, matchedHTTPAuths, containerId)
 			}
 		} else {
 			if auth.SubDomain == "" {

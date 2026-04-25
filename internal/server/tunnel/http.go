@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -104,6 +105,50 @@ func appendForwardedHTTPHeadersOnly(b *strings.Builder, req *http.Request) {
 	}
 	req.Header.Write(b)
 	b.WriteString("\r\n")
+}
+
+// isWebSocketUpgradeRequest reports a client WebSocket opening handshake. The HTTP tunnel is
+// one HTTP request/response at a time; it cannot relay frames after 101, so we reject before hijack.
+func isWebSocketUpgradeRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	for _, v := range r.Header.Values("Connection") {
+		if strings.Contains(strings.ToLower(v), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
+// canRelayWebSocket is true when the inlets client can use /_/data (TCP over WS) to carry post-101 bytes.
+func (t *HTTPTunnel) canRelayWebSocket(dm *types.DomainMapping) bool {
+	if dm == nil || !dm.UseNewProtocol || dm.Adapter == nil {
+		return false
+	}
+	if strings.TrimSpace(dm.ContainerID) == "" {
+		return false
+	}
+	pa, ok := dm.Adapter.(protocol.ProtocolAdapter)
+	if !ok {
+		return false
+	}
+	return pa.NegotiatedFlags()&client.CapabilityFlagTCPOverWS != 0
+}
+
+func is101SwitchingProtocols(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	line := raw
+	if i := bytes.IndexByte(raw, '\n'); i >= 0 {
+		line = raw[:i]
+	}
+	s := strings.ToLower(string(bytes.TrimSpace(line)))
+	return strings.HasPrefix(s, "http/1.1 101") || strings.HasPrefix(s, "http/1.0 101")
 }
 
 func canSemanticStreamRequestBody(req *http.Request) bool {
@@ -234,6 +279,9 @@ func (t *HTTPTunnel) initSocketConfig(sc *socketConfig, req *http.Request) {
 }
 
 func (t *HTTPTunnel) shouldStreamHTTPRequest(sc *socketConfig, req *http.Request) bool {
+	if isWebSocketUpgradeRequest(req) {
+		return false
+	}
 	if sc.subDomain == "" {
 		return false
 	}
@@ -341,6 +389,14 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 		}
 
 		sub := t.subDomainFromRequest(r)
+		if sub != "" && isWebSocketUpgradeRequest(r) {
+			dm := t.ctx.DomainMappings.Get(sub)
+			if !t.canRelayWebSocket(dm) {
+				w.Header().Set("Connection", "close")
+				http.Error(w, "WebSocket (HTTP upgrade) is not available for this HTTP tunnel. Requires a new-protocol client and TCP-over-WebSocket; otherwise use a TCP tunnel to the same port, or direct ws to upstream.", http.StatusNotImplemented)
+				return
+			}
+		}
 		dm := t.ctx.DomainMappings.Get(sub)
 		useStream := dm != nil && !hasConfiguredHTTPAuths(dm) && bodyStreamNegotiated(dm) && canSemanticStreamRequestBody(r)
 
@@ -426,7 +482,19 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn, br *bufio.Reader, firstR
 	}
 
 	processOneBuffered := func(req *http.Request, data string) bool {
-		if err := t.processRequest(tcpConn, socketConfig, data, req); err != nil {
+		sub := t.subDomainFromRequest(req)
+		dm := t.ctx.DomainMappings.Get(sub)
+		if isWebSocketUpgradeRequest(req) && t.canRelayWebSocket(dm) {
+			u := make(chan struct{})
+			var doneOnce sync.Once
+			unblock := func() { doneOnce.Do(func() { close(u) }) }
+			if err := t.processRequest(tcpConn, socketConfig, data, req, unblock); err != nil {
+				logger.Infof("[tunnel:http] Error processing request: %v", err)
+			}
+			<-u
+			return false
+		}
+		if err := t.processRequest(tcpConn, socketConfig, data, req, nil); err != nil {
 			logger.Infof("[tunnel:http] Error processing request: %v", err)
 		}
 		if req.Close {
@@ -455,7 +523,19 @@ func (t *HTTPTunnel) handleConnection(tcpConn net.Conn, br *bufio.Reader, firstR
 			}
 			var full strings.Builder
 			appendForwardedHTTPRequest(&full, req, bodyData)
-			if err := t.processRequest(tcpConn, socketConfig, full.String(), req); err != nil {
+			sub2 := t.subDomainFromRequest(req)
+			dm2 := t.ctx.DomainMappings.Get(sub2)
+			if isWebSocketUpgradeRequest(req) && t.canRelayWebSocket(dm2) {
+				u := make(chan struct{})
+				var doneOnce2 sync.Once
+				unblock2 := func() { doneOnce2.Do(func() { close(u) }) }
+				if err := t.processRequest(tcpConn, socketConfig, full.String(), req, unblock2); err != nil {
+					logger.Infof("[tunnel:http] Error processing request: %v", err)
+				}
+				<-u
+				return false
+			}
+			if err := t.processRequest(tcpConn, socketConfig, full.String(), req, nil); err != nil {
 				logger.Infof("[tunnel:http] Error processing request: %v", err)
 			}
 		}
@@ -699,8 +779,9 @@ func (t *HTTPTunnel) processRequestStream(tcpConn net.Conn, br *bufio.Reader, so
 	return nil
 }
 
-// processRequest processes an HTTP request
-func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig, data string, req *http.Request) error {
+// processRequest processes an HTTP request. blockUntilDone, when set, is invoked once when the
+// HTTP part is done. For WebSocket+101, it runs after the raw relay on the data channel ends.
+func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig, data string, req *http.Request, blockUntilDone func()) error {
 	t.mu.Lock()
 	t.requestCount++
 	requestCount := t.requestCount
@@ -708,6 +789,9 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 	// Skip if this is a WebSocket connection
 	if socketConfig.isWS {
+		if blockUntilDone != nil {
+			blockUntilDone()
+		}
 		return nil
 	}
 
@@ -721,6 +805,9 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		// Check if this is a WebSocket upgrade request
 		if req.URL.Path == t.ctx.Config.WSPath {
 			socketConfig.isWS = true
+			if blockUntilDone != nil {
+				blockUntilDone()
+			}
 			return nil
 		}
 
@@ -735,9 +822,17 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 
 	requestLog := fmt.Sprintf("[%s.%s][request: %d]", socketConfig.subDomain, t.domain, requestCount)
 
+	var unblockOnce sync.Once
+	finish := func() {
+		if blockUntilDone != nil {
+			unblockOnce.Do(blockUntilDone)
+		}
+	}
+
 	if socketConfig.subDomain == "" {
 		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
+		finish()
 		return fmt.Errorf("no subdomain found")
 	}
 
@@ -746,11 +841,13 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	if domainMapping == nil {
 		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
+		finish()
 		return fmt.Errorf("domain mapping not found")
 	}
 	if !isHTTPRequestAuthorized(req, domainMapping.HTTPAuths) {
 		logger.Infof("[401]%s", requestLog)
 		writeUnauthorized(tcpConn, domainMapping.HTTPAuths)
+		finish()
 		return nil
 	}
 
@@ -762,6 +859,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	if wsConn == nil {
 		logger.Infof("[404]%s", requestLog)
 		destroyConnection(tcpConn)
+		finish()
 		return fmt.Errorf("websocket connection not found")
 	}
 
@@ -792,6 +890,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	if !t.ctx.BandwidthLimiter.CheckUpload(clientID, requestBytes) {
 		logger.Infof("[tunnel:http][%s] Upload bandwidth limit exceeded for client: %s", socketConfig.subDomain, clientID)
 		destroyConnection(tcpConn)
+		finish()
 		return fmt.Errorf("upload bandwidth limit exceeded")
 	}
 
@@ -802,6 +901,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 	// Create callback for response before sending request to avoid race where
 	// a fast response arrives before callback registration.
 	var timeoutTimer *time.Timer
+	wsUpgrade := isWebSocketUpgradeRequest(req) && t.canRelayWebSocket(domainMapping)
 	wrappedCallback := func(responseData string) {
 		if timeoutTimer != nil {
 			timeoutTimer.Stop()
@@ -820,17 +920,67 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		if !t.ctx.BandwidthLimiter.CheckDownload(clientID, responseBytesLen) {
 			logger.Infof("[tunnel:http][%s] Download bandwidth limit exceeded for client: %s", socketConfig.subDomain, clientID)
 			destroyConnection(tcpConn)
+			if wsUpgrade {
+				finish()
+			}
 			return
 		}
 
 		// Add download bytes to stats
 		t.ctx.TrafficStats.AddDownloadBytes(clientID, responseBytesLen)
 
+		if wsUpgrade && is101SwitchingProtocols(responseBytes) {
+			streamID := fmt.Sprintf("%s:%s", domainMapping.ContainerID, requestID)
+			container := t.ctx.Container.Get(domainMapping.ContainerID)
+			if container == nil {
+				logger.Infof("[tunnel:http] no tunnel container for WebSocket data plane (id %s)", domainMapping.ContainerID)
+				_, _ = tcpConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 21\r\nConnection: close\r\n\r\ndata plane unavailable"))
+				destroyConnection(tcpConn)
+				finish()
+				return
+			}
+			var wadapter protocol.ProtocolAdapter
+			if container.Adapter != nil {
+				if a, ok := container.Adapter.(protocol.ProtocolAdapter); ok {
+					wadapter = a
+				}
+			}
+			if wadapter == nil {
+				logger.Infof("[tunnel:http] WebSocket upgrade: no protocol adapter on container %s", domainMapping.ContainerID)
+				_, _ = tcpConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 21\r\nConnection: close\r\n\r\ndata plane unavailable"))
+				destroyConnection(tcpConn)
+				finish()
+				return
+			}
+			tt := CreateTCPTunnel(t.ctx)
+			if err := tt.ensureDataChannelForStream(domainMapping.ContainerID, streamID, requestID, container); err != nil {
+				logger.Infof("[tunnel:http] WebSocket: ensure data channel: %v", err)
+				_, _ = tcpConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 28\r\nConnection: close\r\n\r\ndata channel not ready in time"))
+				destroyConnection(tcpConn)
+				finish()
+				return
+			}
+			if _, err := tcpConn.Write(responseBytes); err != nil {
+				logger.Infof("[tunnel:http] Failed to write 101: %v", err)
+				destroyConnection(tcpConn)
+				finish()
+				return
+			}
+			tt.setupTCPStreamOverWebSocket(domainMapping.ContainerID, streamID, tcpConn, wadapter, container.WSSocket, finish)
+			return
+		}
+
 		// Write response to TCP connection
 		if _, err := tcpConn.Write(responseBytes); err != nil {
 			logger.Infof("[tunnel:http] Failed to write response: %v", err)
 			destroyConnection(tcpConn)
+			if wsUpgrade {
+				finish()
+			}
 			return
+		}
+		if wsUpgrade {
+			finish()
 		}
 	}
 
@@ -843,6 +993,9 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 			logger.Infof("[tunnel:http][%s] request timeout (id: %s)", socketConfig.subDomain, id)
 			timeoutCallback(buildGatewayTimeoutResponse())
 		}
+		if wsUpgrade {
+			finish()
+		}
 	})
 
 	// Send request
@@ -854,6 +1007,7 @@ func (t *HTTPTunnel) processRequest(tcpConn net.Conn, socketConfig *socketConfig
 		t.ctx.CallbackContainer.Take(socketConfig.tcpID, requestID)
 		logger.Infof("[tunnel:http] Failed to send HTTP request: %v", err)
 		destroyConnection(tcpConn)
+		finish()
 		return err
 	}
 

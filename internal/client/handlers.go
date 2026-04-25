@@ -417,6 +417,21 @@ func (c *Client) readUpstreamAndStreamHTTPResponse(id string, upstream net.Conn,
 	c.logger.Printf("[tunnel:http] id=%s -> %s", id, resp.Status)
 }
 
+// tunneledRequestIsWebSocket returns true for a raw HTTP/1.1 request that looks like a WebSocket opening handshake.
+func tunneledRequestIsWebSocket(raw string) bool {
+	d := strings.ToLower(raw)
+	if !strings.Contains(d, "upgrade: websocket") {
+		return false
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		l := strings.TrimSpace(strings.ToLower(line))
+		if strings.HasPrefix(l, "connection:") && strings.Contains(l, "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) forwardHTTPRequest(id string, data string) {
 	reqLine := tunnelHTTPRequestLine(data)
 	c.logger.Printf("[tunnel:http] request id=%s %s", id, reqLine)
@@ -428,7 +443,12 @@ func (c *Client) forwardHTTPRequest(id string, data string) {
 		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream unreachable: %v", err))
 		return
 	}
-	defer conn.Close()
+	skipClose := false
+	defer func() {
+		if !skipClose {
+			_ = conn.Close()
+		}
+	}()
 
 	data = string(injectUpstreamBasicAuth([]byte(data), c.opts.UpstreamUsername, c.opts.UpstreamPassword))
 
@@ -451,7 +471,7 @@ func (c *Client) forwardHTTPRequest(id string, data string) {
 		c.sendTunneledHTTPErrorResponse(id, http.StatusBadGateway, fmt.Sprintf("upstream read failed: %v", err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var response bytes.Buffer
 	if err := resp.Write(&response); err != nil {
@@ -477,6 +497,17 @@ func (c *Client) forwardHTTPRequest(id string, data string) {
 		return
 	}
 	c.logger.Printf("[tunnel:http] id=%s %s -> %s", id, reqLine, resp.Status)
+
+	useDataPlane := c.negotiatedCapabilities != nil && (c.negotiatedCapabilities.Flags&CapabilityFlagTCPOverWS) != 0
+	if useDataPlane && resp.StatusCode == 101 && tunneledRequestIsWebSocket(data) && c.containerId != "" {
+		parts := strings.SplitN(id, ":", 2)
+		if len(parts) == 2 {
+			streamID := fmt.Sprintf("%s:%s", c.containerId, parts[1])
+			skipClose = true
+			go c.runTCPDataChannelRelay(streamID, conn)
+			return
+		}
+	}
 }
 
 // sendTunneledHTTPErrorResponse returns a minimal HTTP/1.1 error to the browser when upstream fails.
@@ -673,6 +704,99 @@ func (c *Client) sendTCPStreamCloseNotify(streamID string) error {
 	return err
 }
 
+// runTCPDataChannelRelay runs after the inlets control plane (monitor) is done with a single
+// HTTP or TCP open: raw bytes to/from the server use the per-stream /_/data WebSocket and MessageTypeTCPData.
+func (c *Client) runTCPDataChannelRelay(streamID string, localConn net.Conn) {
+	c.tcpStreamsMu.Lock()
+	c.tcpStreams[streamID] = localConn
+	c.tcpStreamsMu.Unlock()
+
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			c.tcpStreamsMu.Lock()
+			_, exists := c.tcpStreams[streamID]
+			if exists {
+				delete(c.tcpStreams, streamID)
+			}
+			c.tcpStreamsMu.Unlock()
+			_ = localConn.Close()
+			c.removeDataChannel(streamID)
+			c.logger.Printf("[tcp:data][%s] stream closed", streamID)
+		})
+	}
+
+	go func() {
+		defer cleanup()
+
+		for i := 0; i < 50; i++ {
+			if conn, _ := c.getDataChannel(streamID); conn != nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		buffer := make([]byte, 4096)
+		for {
+			n, err := localConn.Read(buffer)
+			if err != nil {
+				errStr := err.Error()
+				isNormalClose := false
+				if errStr == "EOF" {
+					isNormalClose = true
+				}
+				if opErr, ok := err.(*net.OpError); ok {
+					if opErr.Err == syscall.ECONNRESET ||
+						strings.Contains(errStr, "connection reset by peer") {
+						isNormalClose = true
+					}
+				} else if strings.Contains(errStr, "connection reset by peer") {
+					isNormalClose = true
+				}
+				if strings.Contains(errStr, "use of closed network connection") {
+					isNormalClose = true
+				}
+				if isNormalClose {
+					return
+				}
+				c.logger.Printf("[local][%s] read error: %v", streamID, err)
+				return
+			}
+			if n == 0 {
+				c.logger.Printf("[local][%s] connection closed (EOF)", streamID)
+				return
+			}
+			c.sequenceCounterMu.Lock()
+			seq := c.sequenceCounter[streamID]
+			c.sequenceCounter[streamID] = seq + 1
+			c.sequenceCounterMu.Unlock()
+			binaryMsg := buildBinaryMessage(BinaryMessage{
+				Type:     0x03,
+				StreamID: streamID,
+				Sequence: seq,
+				Flags:    0x01,
+				Data:     buffer[:n],
+			})
+			dataConn, writeMu := c.getDataChannel(streamID)
+			if dataConn == nil {
+				c.logger.Printf("[tcp:data][%s] Data connection is not ready", streamID)
+				return
+			}
+			if writeMu != nil {
+				writeMu.Lock()
+			}
+			err = dataConn.WriteMessage(websocket.BinaryMessage, binaryMsg)
+			if writeMu != nil {
+				writeMu.Unlock()
+			}
+			if err != nil {
+				c.logger.Printf("[tcp:data][%s] Failed to send data to server: %v", streamID, err)
+				return
+			}
+		}
+	}()
+}
+
 // forwardTCPConnectionOverWS handles TCP connection using new protocol (TCP over WebSocket)
 func (c *Client) forwardTCPConnectionOverWS(id, requestID, remoteHost string) {
 	streamID := fmt.Sprintf("%s:%s", id, requestID)
@@ -693,142 +817,7 @@ func (c *Client) forwardTCPConnectionOverWS(id, requestID, remoteHost string) {
 	}
 
 	c.logger.Printf("[local][%s] connected", streamID)
-
-	// Update the stream with actual connection
-	// The stream was already registered in handleTCPConnect (with nil placeholder) to avoid race condition
-	c.tcpStreamsMu.Lock()
-	// Always update - replace placeholder (nil) with actual connection
-	c.tcpStreams[streamID] = localConn
-	c.tcpStreamsMu.Unlock()
-
-	// Track if cleanup has been called to avoid double cleanup
-	var cleanupOnce sync.Once
-	cleanup := func() {
-		cleanupOnce.Do(func() {
-			c.tcpStreamsMu.Lock()
-			_, exists := c.tcpStreams[streamID]
-			if exists {
-				delete(c.tcpStreams, streamID)
-			}
-			c.tcpStreamsMu.Unlock()
-
-			if localConn != nil {
-				localConn.Close()
-			}
-			// Close and remove data channel for this stream
-			c.removeDataChannel(streamID)
-			c.logger.Printf("[tcp:data][%s] stream closed", streamID)
-		})
-	}
-
-	// Setup local socket event handlers (similar to setupLocalSocket in TypeScript)
-	// Handle local connection errors
-	go func() {
-		// Monitor connection state
-		// In Go, we can't directly listen to socket events like in Node.js
-		// Instead, we rely on Read() returning errors when connection closes
-		// But we can also check connection state periodically or use SetDeadline
-	}()
-
-	// Read from local connection and send to server via WebSocket
-	go func() {
-		defer cleanup()
-
-		// Wait for data channel to be ready for this stream (up to 5 seconds)
-		for i := 0; i < 50; i++ {
-			if conn, _ := c.getDataChannel(streamID); conn != nil {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-
-		buffer := make([]byte, 4096)
-		for {
-			n, err := localConn.Read(buffer)
-			if err != nil {
-				// Check if it's a normal connection close
-				// "connection reset by peer" is normal when the remote side closes the connection
-				errStr := err.Error()
-				isNormalClose := false
-
-				// Check for EOF
-				if errStr == "EOF" {
-					isNormalClose = true
-				}
-
-				// Check for connection reset by peer (ECONNRESET)
-				if opErr, ok := err.(*net.OpError); ok {
-					if opErr.Err == syscall.ECONNRESET ||
-						strings.Contains(errStr, "connection reset by peer") {
-						isNormalClose = true
-					}
-				} else if strings.Contains(errStr, "connection reset by peer") {
-					isNormalClose = true
-				}
-
-				// Check for use of closed network connection
-				if strings.Contains(errStr, "use of closed network connection") {
-					isNormalClose = true
-				}
-
-				if isNormalClose {
-					// Normal connection close - don't log as error
-					// Connection was closed by the remote side, which is expected behavior
-					return
-				}
-
-				// Unexpected error
-				c.logger.Printf("[local][%s] read error: %v", streamID, err)
-				return
-			}
-
-			if n == 0 {
-				// EOF - normal connection close
-				c.logger.Printf("[local][%s] connection closed (EOF)", streamID)
-				return
-			}
-
-			// Build binary message according to protocol
-			// Get next sequence number for this stream
-			c.sequenceCounterMu.Lock()
-			seq := c.sequenceCounter[streamID]
-			c.sequenceCounter[streamID] = seq + 1
-			c.sequenceCounterMu.Unlock()
-
-			// Build binary message: TCP_DATA (0x03) with FIN flag (0x01)
-			binaryMsg := buildBinaryMessage(BinaryMessage{
-				Type:     0x03, // TCP_DATA
-				StreamID: streamID,
-				Sequence: seq,
-				Flags:    0x01, // FIN flag for single chunk
-				Data:     buffer[:n],
-			})
-
-			// Send binary message directly via WebSocket BinaryMessage
-			dataConn, writeMu := c.getDataChannel(streamID)
-			if dataConn == nil {
-				c.logger.Printf("[tcp:data][%s] Data connection is not ready", streamID)
-				return
-			}
-
-			if writeMu != nil {
-				writeMu.Lock()
-			}
-			err = dataConn.WriteMessage(websocket.BinaryMessage, binaryMsg)
-			if writeMu != nil {
-				writeMu.Unlock()
-			}
-			if err != nil {
-				c.logger.Printf("[tcp:data][%s] Failed to send data to server: %v", streamID, err)
-				return
-			}
-		}
-	}()
-
-	// Note: Data from server to client is handled by handleTCPData
-	// The cleanup will be called when:
-	// 1. Read loop exits (connection closed/error)
-	// 2. handleTCPData detects write error and calls cleanup
+	c.runTCPDataChannelRelay(streamID, localConn)
 }
 
 // handleTCPDataBinary handles binary TCP data message directly

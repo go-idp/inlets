@@ -507,3 +507,24 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 - `internal/client/http1_response_framing.go` — `responseHeadForBufferedUpstreamBody`  
 - `internal/client/handlers.go`  
 - `internal/client/http1_response_framing_test.go` — `TestResponseHeadForBufferedUpstreamBodyStripsChunked`
+
+## 2026-04-25: WebSocket to tunneled HTTP subdomain — not supported (return 501)
+
+### Symptom
+
+`wss://sub.domain/...` to the public HTTP tunneled host misbehaves; direct `ws://upstream:port/...` works.
+
+### Root cause
+
+The HTTP tunnel is **one** HTTP/1.1 request/response per `forwardHTTPRequest` / streaming path, then the client **closes** the upstream `net.Conn` after the response. A WebSocket needs **101 Switching Protocols** plus **indefinite** bidirectional **non-HTTP** bytes on the same TCP. The server’s hijacked `handleConnection` also keeps doing `http.ReadRequest`, which is invalid after WebSocket frames.
+
+### Behavior
+
+On **subdomain** requests with a WebSocket handshake (`Upgrade: websocket` and `Connection` containing `upgrade`), the server returns **HTTP 501** and a **plain** explanation **before** hijack, so clients fail fast instead of hanging.
+
+**Workaround**: use an **inlets TCP tunnel** to the same port, or only HTTP to the public hostname until a real WS relay is implemented (e.g. over `/_/data` or dedicated framing).
+
+### Related files
+
+- `internal/server/tunnel/http.go` — `isWebSocketUpgradeRequest`  
+- `internal/server/tunnel/http_websocket_test.go`
