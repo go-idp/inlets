@@ -508,23 +508,29 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 - `internal/client/handlers.go`  
 - `internal/client/http1_response_framing_test.go` — `TestResponseHeadForBufferedUpstreamBodyStripsChunked`
 
-## 2026-04-25: WebSocket to tunneled HTTP subdomain — not supported (return 501)
+## 2026-04-25: HTTP 隧道 + WebSocket — 首包误走语义流导致无法 101 与 /_/data 中继
 
 ### Symptom
 
-`wss://sub.domain/...` to the public HTTP tunneled host misbehaves; direct `ws://upstream:port/...` works.
+公网子域 `ws://sub.domain/.../path` 升级握手挂起、终端连不上；直连上游 `ws://127.0.0.1:port` 正常。协商了 `HTTPBodyStream` 与 `TCPOverWS` 时，按理说应走 `forwardHTTPRequest` → 101 → `runTCPDataChannelRelay`。
 
-### Root cause
+### 根因
 
-The HTTP tunnel is **one** HTTP/1.1 request/response per `forwardHTTPRequest` / streaming path, then the client **closes** the upstream `net.Conn` after the response. A WebSocket needs **101 Switching Protocols** plus **indefinite** bidirectional **non-HTTP** bytes on the same TCP. The server’s hijacked `handleConnection` also keeps doing `http.ReadRequest`, which is invalid after WebSocket frames.
+`HTTPTunnel.Attach` 在判定首包是否用 **语义流**（`useStream` = headers-only + `processRequestStream`）时，**未排除** `Upgrade: websocket`。WebSocket 握手是 **无 body 的 GET**，`ContentLength >= 0` 时 `canSemanticStreamRequestBody` 为真，首包被误切到 `processRequestStream` / 客户端 `readUpstreamAndStreamHTTPResponse`，**不会**在 101 后 `runTCPDataChannelRelay`（`forwardHTTPRequest` 里才有该逻辑），表现为握手失败或挂起。
 
-### Behavior
+`shouldStreamHTTPRequest` 在 `http.go` 里已对 **后续** keep-alive 子请求排除了 WebSocket，但 **Hijack 后第一条** 的 `useStream` 是独立算式，需同样排除。
 
-On **subdomain** requests with a WebSocket handshake (`Upgrade: websocket` and `Connection` containing `upgrade`), the server returns **HTTP 501** and a **plain** explanation **before** hijack, so clients fail fast instead of hanging.
+### 修复要点
 
-**Workaround**: use an **inlets TCP tunnel** to the same port, or only HTTP to the public hostname until a real WS relay is implemented (e.g. over `/_/data` or dedicated framing).
+在 `Attach` 的 `useStream` 上增加 `&& !isWebSocketUpgradeRequest(r)`，与 `shouldStreamHTTPRequest` 一致，使首条 WebSocket 请求走**整包** `processRequest` → 101 → `setupTCPStreamOverWebSocket`。
+
+### 经验与审查
+
+- 语义流（`HTTPBodyStream`）与 **WebSocket 升级** 互斥：升级必须走全量 raw 请求与既有 101+data 面中继。
+- 无 `TCPOverWS` 或老协议时，`canRelayWebSocket` 为 false 仍会 **501**（与此前「不支持」文档一致）；新协议+数据面就绪时应能打通。
 
 ### Related files
 
-- `internal/server/tunnel/http.go` — `isWebSocketUpgradeRequest`  
-- `internal/server/tunnel/http_websocket_test.go`
+- `internal/server/tunnel/http.go` — `Attach`（`useStream`）、`shouldStreamHTTPRequest`  
+- `internal/client/handlers.go` — `forwardHTTPRequest` / `runTCPDataChannelRelay`  
+- `internal/server/tunnel/http_websocket_test.go` — `isWebSocketUpgradeRequest`

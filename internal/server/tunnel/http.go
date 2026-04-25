@@ -398,7 +398,9 @@ func (t *HTTPTunnel) Attach(server *http.Server) {
 			}
 		}
 		dm := t.ctx.DomainMappings.Get(sub)
-		useStream := dm != nil && !hasConfiguredHTTPAuths(dm) && bodyStreamNegotiated(dm) && canSemanticStreamRequestBody(r)
+		// WebSocket handshakes must use the full raw request and processRequest (101 + data plane), not
+		// semantic request streaming (see shouldStreamHTTPRequest — same rule here for the first frame).
+		useStream := dm != nil && !hasConfiguredHTTPAuths(dm) && bodyStreamNegotiated(dm) && canSemanticStreamRequestBody(r) && !isWebSocketUpgradeRequest(r)
 
 		var firstData string
 		if useStream {
