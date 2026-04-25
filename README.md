@@ -97,12 +97,14 @@ go build -o inlets cmd/inlets/inlets.go
 #### HTTP Tunnel
 
 ```bash
-# Public HTTP tunnel (public mode)
+# Public HTTP tunnel (public mode; control plane unauthenticated: session may be time-limited by server)
 inlets client http 127.0.0.1:9000
 
 # Specify subdomain + token
 inlets client --sub-domain myapp -t token http 127.0.0.1:9000
 ```
+
+**Public monitor session:** If you do not pass `--token` or `--credentials`, the server classifies the client as a “public” (temporary) control-plane user and may close the WebSocket after a default period (e.g. 10 minutes, configurable in server YAML as `publicHTTPNoAuth`). This is independent of HTTP tunnel or public-URL (edge) auth. See `docs/features/PUBLIC_MONITOR_SESSION.md`.
 
 #### TCP Tunnel
 

@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	publicHTTPNoAuthSessionTTL          = 10 * time.Minute
-	publicHTTPNoAuthSessionWarnLeadTime = 2 * time.Minute
+	publicMonitorSessionDefaultTTL     = 10 * time.Minute
+	publicMonitorSessionDefaultWarnLead = 2 * time.Minute
+	// closeReasonPublicMonitorSessionTimeout is sent when the unauthenticated (public) monitor session hits its time limit.
+	closeReasonPublicMonitorSessionTimeout = "public monitor session timeout"
 )
 
 func requiresModernClientForAdvancedFeatures(authVersion string, auth *client.Authentication, cfg *client.Config) (bool, string) {
@@ -67,11 +69,14 @@ func mergeHTTPIngressEdgeAuth(serverMatched []client.HTTPTunnelAuth, auth *clien
 	}
 }
 
-func shouldApplyHTTPNoAuthTTL(auth *client.Authentication, httpAuths []client.HTTPTunnelAuth) bool {
+// shouldApplyPublicMonitorSessionTTL returns true for temporary (public) monitor logins: no --token and no --credentials.
+// This is only about the client–server control-plane auth protocol; it does not use tunnel type, HTTP, or public URL (edge) auth.
+func shouldApplyPublicMonitorSessionTTL(auth *client.Authentication) bool {
 	if auth == nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(auth.Type), "http") && len(httpAuths) == 0
+	at := strings.ToLower(strings.TrimSpace(auth.AuthType))
+	return at != "credentials" && at != "token"
 }
 
 func sendWarnEvent(wsConn *WebSocketConnection, msg string) {
@@ -89,12 +94,12 @@ func sendWarnEvent(wsConn *WebSocketConnection, msg string) {
 	}
 }
 
-func resolveHTTPNoAuthTTL(ttl, warnLead time.Duration) (time.Duration, time.Duration) {
+func resolvePublicMonitorSessionTTL(ttl, warnLead time.Duration) (time.Duration, time.Duration) {
 	if ttl <= 0 {
-		ttl = publicHTTPNoAuthSessionTTL
+		ttl = publicMonitorSessionDefaultTTL
 	}
 	if warnLead <= 0 {
-		warnLead = publicHTTPNoAuthSessionWarnLeadTime
+		warnLead = publicMonitorSessionDefaultWarnLead
 	}
 	if warnLead >= ttl {
 		warnLead = ttl / 2
@@ -105,20 +110,20 @@ func resolveHTTPNoAuthTTL(ttl, warnLead time.Duration) (time.Duration, time.Dura
 	return ttl, warnLead
 }
 
-func scheduleHTTPNoAuthTTL(wsConn *WebSocketConnection, clientID string, ttl, warnLead time.Duration) {
-	ttl, warnLead = resolveHTTPNoAuthTTL(ttl, warnLead)
-	sendWarnEvent(wsConn, fmt.Sprintf("Public HTTP tunnel has no edge auth; session lifetime is %s.", ttl))
+func schedulePublicMonitorSessionTTL(wsConn *WebSocketConnection, clientID string, ttl, warnLead time.Duration) {
+	ttl, warnLead = resolvePublicMonitorSessionTTL(ttl, warnLead)
+	sendWarnEvent(wsConn, fmt.Sprintf("Unauthenticated (public) monitor session; max lifetime is %s.", ttl))
 	warnAfter := ttl - warnLead
 	time.AfterFunc(warnAfter, func() {
-		sendWarnEvent(wsConn, fmt.Sprintf("Public HTTP tunnel without edge auth will close in %s.", warnLead))
+		sendWarnEvent(wsConn, fmt.Sprintf("Unauthenticated session will close in %s.", warnLead))
 	})
 	time.AfterFunc(ttl, func() {
-		sendWarnEvent(wsConn, fmt.Sprintf("Public HTTP tunnel without edge auth reached the %s limit and will now close.", ttl))
+		sendWarnEvent(wsConn, fmt.Sprintf("Unauthenticated session reached the %s limit; closing.", ttl))
 		wsConn.writeMu.Lock()
-		_ = wsConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "public http no-auth timeout"), time.Now().Add(2*time.Second))
+		_ = wsConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, closeReasonPublicMonitorSessionTimeout), time.Now().Add(2*time.Second))
 		wsConn.writeMu.Unlock()
 		_ = wsConn.Close()
-		logger.Infof("[monitor:ws][%s] closed unauthenticated HTTP tunnel after %s", clientID, ttl)
+		logger.Infof("[monitor:ws][%s] closed unauthenticated (public) monitor session after %s", clientID, ttl)
 	})
 }
 
@@ -399,13 +404,13 @@ func handleAuthenticate(
 	// Send authentication success response
 	url := getServerUrlBySubDomain(*subDomain, options, wsConn.RequestHost)
 	sendAuthResponse(wsConn, options, true, "", url, config)
-	if shouldApplyHTTPNoAuthTTL(&auth, matchedHTTPAuths) {
+	if shouldApplyPublicMonitorSessionTTL(&auth) {
 		var ttl, warnLead time.Duration
 		if options != nil {
 			ttl = options.PublicHTTPNoAuthSessionTTL
 			warnLead = options.PublicHTTPNoAuthWarnLeadTime
 		}
-		scheduleHTTPNoAuthTTL(wsConn, clientId, ttl, warnLead)
+		schedulePublicMonitorSessionTTL(wsConn, clientId, ttl, warnLead)
 	}
 
 	logger.Infof("[monitor:ws][%s] authenticated successfully (container: %s)", clientId, containerId)

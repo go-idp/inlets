@@ -20,11 +20,10 @@ type CreateWebSocketOptions struct {
 	Secure       bool
 	Token        types.GetToken
 	Notification *Notification
-	// PublicHTTPNoAuthSessionTTL controls automatic close for public HTTP tunnels without edge auth.
-	// Zero means use default (10m).
+	// PublicHTTPNoAuthSessionTTL: max lifetime for unauthenticated (public) monitor clients only.
+	// YAML key is historical. Zero means use default (10m). Not based on HTTP tunnel or edge auth.
 	PublicHTTPNoAuthSessionTTL time.Duration
-	// PublicHTTPNoAuthWarnLeadTime controls when to warn clients before the timeout.
-	// Zero means use default (2m).
+	// PublicHTTPNoAuthWarnLeadTime: how long before expiry to send warn. Zero means default (2m).
 	PublicHTTPNoAuthWarnLeadTime time.Duration
 }
 

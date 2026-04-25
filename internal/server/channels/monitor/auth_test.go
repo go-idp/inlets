@@ -189,39 +189,47 @@ func TestMergeHTTPIngressEdgeAuth(t *testing.T) {
 	}
 }
 
-func TestShouldApplyHTTPNoAuthTTL(t *testing.T) {
-	if !shouldApplyHTTPNoAuthTTL(&client.Authentication{Type: "http"}, nil) {
-		t.Fatalf("expected TTL for http without auth")
+func TestShouldApplyPublicMonitorSessionTTL(t *testing.T) {
+	// Unauthenticated (public) monitor: apply regardless of tunnel type or edge auth.
+	if !shouldApplyPublicMonitorSessionTTL(&client.Authentication{Type: "http", AuthType: "public"}) {
+		t.Fatalf("expected session TTL for public http")
 	}
-	if shouldApplyHTTPNoAuthTTL(&client.Authentication{Type: "http"}, []client.HTTPTunnelAuth{{Type: "basic", Username: "u"}}) {
-		t.Fatalf("did not expect TTL when edge auth exists")
+	if !shouldApplyPublicMonitorSessionTTL(&client.Authentication{Type: "http"}) {
+		t.Fatalf("expected session TTL for empty authType (treat as public)")
 	}
-	if shouldApplyHTTPNoAuthTTL(&client.Authentication{Type: "tcp"}, nil) {
-		t.Fatalf("did not expect TTL for non-http tunnel")
+	if !shouldApplyPublicMonitorSessionTTL(&client.Authentication{Type: "tcp", AuthType: "public"}) {
+		t.Fatalf("expected session TTL for public tcp (protocol is monitor-only; tunnel type irrelevant)")
 	}
-	if shouldApplyHTTPNoAuthTTL(nil, nil) {
+	// Token / credentials on monitor: no temp-user session cap.
+	if shouldApplyPublicMonitorSessionTTL(&client.Authentication{Type: "http", AuthType: "credentials"}) {
+		t.Fatalf("did not expect TTL with credentials")
+	}
+	if shouldApplyPublicMonitorSessionTTL(&client.Authentication{Type: "http", AuthType: "token"}) {
+		t.Fatalf("did not expect TTL with token")
+	}
+	if shouldApplyPublicMonitorSessionTTL(nil) {
 		t.Fatalf("did not expect TTL for nil auth")
 	}
 }
 
-func TestResolveHTTPNoAuthTTL(t *testing.T) {
-	ttl, warn := resolveHTTPNoAuthTTL(0, 0)
+func TestResolvePublicMonitorSessionTTL(t *testing.T) {
+	ttl, warn := resolvePublicMonitorSessionTTL(0, 0)
 	if ttl != 10*time.Minute || warn != 2*time.Minute {
 		t.Fatalf("expected defaults 10m/2m, got %s/%s", ttl, warn)
 	}
 
-	ttl, warn = resolveHTTPNoAuthTTL(15*time.Minute, 5*time.Minute)
+	ttl, warn = resolvePublicMonitorSessionTTL(15*time.Minute, 5*time.Minute)
 	if ttl != 15*time.Minute || warn != 5*time.Minute {
 		t.Fatalf("expected custom values to be preserved, got %s/%s", ttl, warn)
 	}
 
-	ttl, warn = resolveHTTPNoAuthTTL(90*time.Second, 2*time.Minute)
+	ttl, warn = resolvePublicMonitorSessionTTL(90*time.Second, 2*time.Minute)
 	if warn >= ttl {
 		t.Fatalf("warn must be less than ttl, got %s/%s", ttl, warn)
 	}
 }
 
-func TestScheduleHTTPNoAuthTTLWarnAndClose(t *testing.T) {
+func TestSchedulePublicMonitorSessionTTLWarnAndClose(t *testing.T) {
 	serverConnCh := make(chan *websocket.Conn, 1)
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -248,7 +256,7 @@ func TestScheduleHTTPNoAuthTTLWarnAndClose(t *testing.T) {
 	}
 	defer serverConn.Close()
 
-	scheduleHTTPNoAuthTTL(&WebSocketConnection{Conn: serverConn}, "client-test", 300*time.Millisecond, 150*time.Millisecond)
+	schedulePublicMonitorSessionTTL(&WebSocketConnection{Conn: serverConn}, "client-test", 300*time.Millisecond, 150*time.Millisecond)
 
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var warns []string
@@ -277,8 +285,8 @@ func TestScheduleHTTPNoAuthTTLWarnAndClose(t *testing.T) {
 	if len(warns) < 2 {
 		t.Fatalf("expected at least 2 warn messages, got %d: %#v", len(warns), warns)
 	}
-	if !strings.Contains(warns[0], "session lifetime") {
-		t.Fatalf("expected first warning to mention lifetime, got %q", warns[0])
+	if !strings.Contains(warns[0], "Unauthenticated (public) monitor session") {
+		t.Fatalf("expected first warning to mention unauthenticated public session, got %q", warns[0])
 	}
 	if !strings.Contains(warns[1], "will close in") {
 		t.Fatalf("expected second warning to mention lead close warning, got %q", warns[1])

@@ -17,7 +17,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const publicHTTPNoAuthTimeoutCloseReason = "public http no-auth timeout"
+// Close reasons the server may send when a public (unauthenticated) monitor session hits its time limit.
+// The server decides policy; the client only reacts. Legacy text kept for older servers.
+const (
+	publicMonitorSessionTimeoutCloseReason      = "public monitor session timeout"
+	legacyPublicHTTPNoAuthTimeoutCloseReason    = "public http no-auth timeout"
+)
 
 // Client wraps a websocket tunnel session and manages forwarding/heartbeat.
 type Client struct {
@@ -417,7 +422,7 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 		var msgArray []interface{}
 		if err := c.monitorConn.ReadJSON(&msgArray); err != nil {
 			if shouldExitOnPublicHTTPNoAuthTimeoutClose(err) {
-				c.logger.Printf("Monitor channel closed by server due to unauthenticated HTTP tunnel timeout; exiting without reconnect")
+				c.logger.Printf("Monitor channel closed by server (unauthenticated public session time limit); exiting without reconnect")
 				os.Exit(0)
 			}
 
@@ -586,14 +591,22 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 	}
 }
 
+// shouldExitOnPublicHTTPNoAuthTimeoutClose detects a server-initiated close for the public monitor session TTL
+// so we exit without useless reconnect. Policy lives on the server only.
 func shouldExitOnPublicHTTPNoAuthTimeoutClose(err error) bool {
 	if err == nil {
 		return false
 	}
-	if closeErr, ok := err.(*websocket.CloseError); ok {
-		return strings.Contains(strings.ToLower(closeErr.Text), publicHTTPNoAuthTimeoutCloseReason)
+	low := func(s string) string { return strings.ToLower(s) }
+	check := func(s string) bool {
+		s = low(s)
+		return strings.Contains(s, low(publicMonitorSessionTimeoutCloseReason)) ||
+			strings.Contains(s, low(legacyPublicHTTPNoAuthTimeoutCloseReason))
 	}
-	return strings.Contains(strings.ToLower(err.Error()), publicHTTPNoAuthTimeoutCloseReason)
+	if closeErr, ok := err.(*websocket.CloseError); ok {
+		return check(closeErr.Text)
+	}
+	return check(err.Error())
 }
 
 // handleDataChannel handles messages from a per-stream data channel (only binary TCP data messages)

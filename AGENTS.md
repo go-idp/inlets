@@ -447,3 +447,22 @@ This removes ambiguous combinations and makes websocket endpoint resolution pred
 - `internal/client/child_options.go`
 - `README.md`
 - `conf/example/client.yaml`
+
+## 2026-04-24: Public (unauthenticated) monitor session TTL (not HTTP / edge auth)
+
+### Background
+
+A session time limit for **temporary** control-plane logins (monitor `authType` public: no `--token` / `--credentials`) must **not** be tied to HTTP tunnel type or public-URL (edge) auth. Those are separate product concerns.
+
+### Behavior
+
+- `shouldApplyPublicMonitorSessionTTL` — true only when monitor auth is not `token` or `credentials` (public / empty treated as unauthenticated to server).  
+- **No** use of `auth.Type` (http/tcp) or merged HTTP edge auth.  
+- Client: logs `warn`, exits without reconnect on close reason `public monitor session timeout` (legacy: `public http no-auth timeout`).  
+
+### Related files
+
+- `internal/server/channels/monitor/auth.go`, `auth_test.go`, `common.go`  
+- `internal/client/client.go`, `monitor_close_test.go`  
+- `conf/example/server.yaml`  
+- `docs/features/PUBLIC_MONITOR_SESSION.md`

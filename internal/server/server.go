@@ -29,10 +29,10 @@ type Options struct {
 	Token           types.GetToken
 	Notification    *client.NotificationConfig
 	BandwidthLimits *limiter.ClientBandwidthLimits
-	// PublicHTTPNoAuthSessionTTL controls lifetime for HTTP tunnels without edge auth.
-	// Zero means default 10m.
+	// PublicHTTPNoAuthSessionTTL: max lifetime for public (unauthenticated) monitor clients.
+	// Zero means default 10m. Independent of tunnel type and public URL auth.
 	PublicHTTPNoAuthSessionTTL time.Duration
-	// PublicHTTPNoAuthWarnLeadTime controls warning lead time before the timeout.
+	// PublicHTTPNoAuthWarnLeadTime: lead time before close warning.
 	// Zero means default 2m.
 	PublicHTTPNoAuthWarnLeadTime time.Duration
 }
