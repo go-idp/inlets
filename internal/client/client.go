@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -615,6 +617,38 @@ func shouldExitOnPublicHTTPNoAuthTimeoutClose(err error) bool {
 	return check(err.Error())
 }
 
+// isDataChannelReadClosedNormally classifies dataConn.ReadMessage errors after the peer
+// or local code closed the WebSocket. These are not actionable failures; logging them
+// as "read error" is noisy when removeDataChannel/Close races with the read loop.
+func isDataChannelReadClosedNormally(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == io.EOF {
+		return true
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var ce *websocket.CloseError
+	if errors.As(err, &ce) {
+		return true
+	}
+	s := err.Error()
+	if strings.Contains(s, "use of closed network connection") {
+		return true
+	}
+	if strings.Contains(s, "connection reset by peer") {
+		return true
+	}
+	if opErr, ok := err.(*net.OpError); ok {
+		if opErr.Err == syscall.ECONNRESET {
+			return true
+		}
+	}
+	return false
+}
+
 // handleDataChannel handles messages from a per-stream data channel (binary TCP data; text ping/pong)
 func (c *Client) handleDataChannel(streamID string, dataConn *websocket.Conn) {
 	c.startDataChannelHeartbeat(streamID)
@@ -623,7 +657,9 @@ func (c *Client) handleDataChannel(streamID string, dataConn *websocket.Conn) {
 	for {
 		messageType, message, err := dataConn.ReadMessage()
 		if err != nil {
-			c.logger.Printf("Data channel read error for %s: %v", streamID, err)
+			if !isDataChannelReadClosedNormally(err) {
+				c.logger.Printf("Data channel read error for %s: %v", streamID, err)
+			}
 			c.removeDataChannel(streamID)
 			return
 		}
