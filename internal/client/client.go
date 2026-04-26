@@ -35,6 +35,10 @@ type Client struct {
 	dataWriteMu            map[string]*sync.Mutex // Per-stream data channel write mutex
 	dataConns              map[string]*websocket.Conn
 	dataConnMu             *sync.RWMutex
+	// data channel application ping/pong (per stream), same wire format and timing as monitor
+	dataHeartbeatMu         sync.Mutex
+	dataPingTimer           map[string]*time.Timer
+	dataPingTimeoutTimer    map[string]*time.Timer
 	negotiatedCapabilities *Capabilities
 	clientId               string // Client ID from server after authentication
 	containerId            string // Container ID from server after authentication
@@ -94,10 +98,12 @@ func New(opts *Options) *Client {
 		pingTimeout:     defaultPingTimeout,
 		tcpStreams:      make(map[string]net.Conn),
 		sequenceCounter: make(map[string]uint32),
-		dataConns:       make(map[string]*websocket.Conn),
-		dataWriteMu:     make(map[string]*sync.Mutex),
-		dataConnMu:      &sync.RWMutex{},
-		httpStreamSess:  make(map[string]*httpStreamSession),
+		dataConns:              make(map[string]*websocket.Conn),
+		dataWriteMu:            make(map[string]*sync.Mutex),
+		dataConnMu:             &sync.RWMutex{},
+		dataPingTimer:          make(map[string]*time.Timer),
+		dataPingTimeoutTimer:   make(map[string]*time.Timer),
+		httpStreamSess:         make(map[string]*httpStreamSession),
 	}
 }
 
@@ -609,8 +615,11 @@ func shouldExitOnPublicHTTPNoAuthTimeoutClose(err error) bool {
 	return check(err.Error())
 }
 
-// handleDataChannel handles messages from a per-stream data channel (only binary TCP data messages)
+// handleDataChannel handles messages from a per-stream data channel (binary TCP data; text ping/pong)
 func (c *Client) handleDataChannel(streamID string, dataConn *websocket.Conn) {
+	c.startDataChannelHeartbeat(streamID)
+	defer c.stopDataChannelHeartbeat(streamID)
+
 	for {
 		messageType, message, err := dataConn.ReadMessage()
 		if err != nil {
@@ -619,13 +628,31 @@ func (c *Client) handleDataChannel(streamID string, dataConn *websocket.Conn) {
 			return
 		}
 
-		// Only handle binary messages (TCP data)
 		if messageType == websocket.BinaryMessage {
 			if err := c.handleTCPDataBinary(message); err != nil {
 				c.logger.Printf("Error handling TCP data for %s: %v", streamID, err)
 			}
+		} else if messageType == websocket.TextMessage {
+			if len(message) == 0 {
+				continue
+			}
+			var msgArray []interface{}
+			if err := json.Unmarshal(message, &msgArray); err != nil {
+				c.logger.Printf("Data channel JSON parse error for %s: %v", streamID, err)
+				continue
+			}
+			if len(msgArray) < 1 {
+				continue
+			}
+			ev, _ := msgArray[0].(string)
+			switch ev {
+			case "pong":
+				c.handleDataChannelPong(streamID)
+			case "ping":
+				c.sendDataChannelPong(streamID)
+			}
 		} else {
-			c.logger.Printf("Unexpected message type on data channel %s: %d (expected BinaryMessage)", streamID, messageType)
+			c.logger.Printf("Unexpected message type on data channel %s: %d (expected Binary or Text)", streamID, messageType)
 		}
 	}
 }
@@ -722,6 +749,7 @@ func (c *Client) getDataChannel(streamID string) (*websocket.Conn, *sync.Mutex) 
 
 // removeDataChannel removes and closes data channel for a stream
 func (c *Client) removeDataChannel(streamID string) {
+	c.stopDataChannelHeartbeat(streamID)
 	c.dataConnMu.Lock()
 	conn := c.dataConns[streamID]
 	delete(c.dataConns, streamID)
@@ -734,6 +762,15 @@ func (c *Client) removeDataChannel(streamID string) {
 
 // closeAllDataChannels closes and clears all data channels
 func (c *Client) closeAllDataChannels() {
+	c.dataConnMu.RLock()
+	ids := make([]string, 0, len(c.dataConns))
+	for id := range c.dataConns {
+		ids = append(ids, id)
+	}
+	c.dataConnMu.RUnlock()
+	for _, id := range ids {
+		c.stopDataChannelHeartbeat(id)
+	}
 	c.dataConnMu.Lock()
 	for streamID, conn := range c.dataConns {
 		if conn != nil {

@@ -189,4 +189,5 @@ func (c *Client) handleSocketConfig(payload interface{}) {
 
 	c.logger.Printf("Heartbeat config updated: interval=%v timeout=%v", c.pingInterval, c.pingTimeout)
 	c.startHeartbeat()
+	c.restartAllDataChannelHeartbeats()
 }

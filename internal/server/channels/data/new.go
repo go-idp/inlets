@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
 
@@ -163,9 +164,53 @@ func (h *WebSocketDataChannelHandler) handleConnection(conn *websocket.Conn, con
 					binaryAdapter.HandleBinaryMessage(message)
 				}
 			}
+		} else if messageType == websocket.TextMessage {
+			// JSON ["ping",null] / ["pong",null] — same as monitor, keeps the data channel from going idle
+			if len(message) == 0 {
+				continue
+			}
+			var msgArray []interface{}
+			if err := json.Unmarshal(message, &msgArray); err != nil {
+				logger.Infof("[monitor:ws:data] Invalid JSON on data channel (container %s): %v", containerId, err)
+				continue
+			}
+			if len(msgArray) < 1 {
+				continue
+			}
+			ev, _ := msgArray[0].(string)
+			switch ev {
+			case "ping":
+				sendDataChannelPongJSON(conn, container, streamId)
+			case "pong":
+				// client-initiated keepalive; server has no per-stream send timeout
+			}
 		} else {
-			// Data channel only accepts binary messages for new protocol
-			logger.Infof("[monitor:ws:data] Unexpected message type on data channel: %d (expected BinaryMessage)", messageType)
+			logger.Infof("[monitor:ws:data] Unexpected message type on data channel: %d (expected Binary or Text)", messageType)
 		}
+	}
+}
+
+// sendDataChannelPongJSON responds to a client JSON ping (same format as the monitor channel).
+func sendDataChannelPongJSON(conn *websocket.Conn, container *types.TunnelMapping, streamId string) {
+	msg := []interface{}{"pong", nil}
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	var mu *sync.Mutex
+	if container != nil && container.DataMu != nil {
+		container.DataMu.RLock()
+		mu = container.DataWriteMu[streamId]
+		container.DataMu.RUnlock()
+	}
+	if mu != nil {
+		mu.Lock()
+		err = conn.WriteMessage(websocket.TextMessage, msgBytes)
+		mu.Unlock()
+	} else {
+		err = conn.WriteMessage(websocket.TextMessage, msgBytes)
+	}
+	if err != nil {
+		logger.Infof("[monitor:ws:data] Failed to send pong on data channel (streamId=%s): %v", streamId, err)
 	}
 }
