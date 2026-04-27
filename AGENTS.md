@@ -670,9 +670,10 @@ VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普�
 
 ### 仓库设置
 
-- **Settings → Pages**：**Source** 选 **GitHub Actions**；项目页 `https://<org>.github.io/<repo>/` 时需在 VitePress 配置 **`base: '/<repo>/'`**（根站点保持 `base: '/'`）。
+- **Settings → Pages**：**Source** 选 **GitHub Actions**；项目页 `https://<org>.github.io/<repo>/` 时 VitePress **`base`** 须为 **`/<repo>/`**（否则 CSS/JS 从域名根加载会 404、页面无样式）。本仓库 `docs/.vitepress/config.ts` 中 **`siteBase = '/inlets/'`** 对应 **https://go-idp.github.io/inlets/**；`head` 里 favicon 等应用同一前缀。
 
 ### 相关路径
 
 - `.github/workflows/docs.yml`  
-- `docs/README.md` — 部署说明
+- `docs/README.md` — 部署说明  
+- `docs/.vitepress/config.ts` — `siteBase` / `base`

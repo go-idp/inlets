@@ -14,7 +14,7 @@ Mermaid diagrams use **`vitepress-plugin-mermaid`** (see `.vitepress/config.ts`)
 ```bash
 cd docs
 pnpm install
-pnpm dev          # local dev server
+pnpm dev          # local dev server (open http://localhost:5173/inlets/ — base matches GitHub Pages)
 pnpm build        # static output to .vitepress/dist
 pnpm preview      # serve production build locally
 pnpm typecheck    # TypeScript (config + scripts)
@@ -26,7 +26,7 @@ pnpm typecheck    # TypeScript (config + scripts)
 - **GitHub Actions → GitHub Pages** (same approach as [go-zoox/ingress](https://github.com/go-zoox/ingress/blob/master/.github/workflows/docs.yml)): workflow `.github/workflows/docs.yml` runs on pushes to `master` / `main` when `docs/**` or the workflow file changes, or on manual `workflow_dispatch`. It uses `pnpm` + `pnpm run build`, then `actions/upload-pages-artifact` and `actions/deploy-pages`.
   1. In the GitHub repo: **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions** (not “Deploy from a branch”).
   2. The first run may require approving the `github-pages` environment if your org restricts deployments.
-  3. If the site is served from a **project** URL (`https://<org>.github.io/<repo>/`), set VitePress `base` in `.vitepress/config.ts` to `'/<repo>/'` (e.g. `'/inlets/'`). The default `base: '/'` matches a **user/org root** site (`https://<user>.github.io/`).
+  3. This repo sets **`base: '/inlets/'`** in `.vitepress/config.ts` for **https://go-idp.github.io/inlets/**. If you fork to a **user/org root** site (`https://<user>.github.io/` with no repo prefix), change `siteBase` back to `'/'`.
 
 ## Layout
 

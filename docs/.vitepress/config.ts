@@ -9,6 +9,9 @@ const dayjsEsm = path.join(docsRoot, 'node_modules/dayjs/esm/index.js')
 
 const githubRepo = 'https://github.com/go-idp/inlets'
 
+// GitHub Pages project URL: https://go-idp.github.io/inlets/
+const siteBase = '/inlets/'
+
 const sharedTheme = {
   socialLinks: [{ icon: 'github', link: githubRepo }],
   search: {
@@ -136,11 +139,11 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
 
 export default withMermaid(
   defineConfig({
-    base: '/',
+    base: siteBase,
     cleanUrls: true,
 
     head: [
-      ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
+      ['link', { rel: 'icon', type: 'image/svg+xml', href: `${siteBase}logo.svg` }],
     ],
 
     mermaid: {
