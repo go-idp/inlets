@@ -677,3 +677,22 @@ VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普�
 - `.github/workflows/docs.yml`  
 - `docs/README.md` — 部署说明  
 - `docs/.vitepress/config.ts` — `siteBase` / `base`
+
+## 2026-04-27: 匿名 `clientId` 与 `/_/data` 校验一致
+
+### 问题现象
+
+- 日志 `[monitor:ws:data] ClientId mismatch: expected , got anonymous-xxxxxxxx`：隧道映射里 `ClientId` 为空，数据通道 URL 却带 `anonymous-*`。
+
+### 根因
+
+- `handleAuthenticate` 在 `auth.ClientId` 为空时生成 `anonymous-*` 赋给局部变量 `clientId`，并写入 `wsConn.ClientID` 与 `authenticate` 响应，但 `ctx.Container.Create` 仍使用**未改过的** `&auth`（`ClientId` 仍为空），`/_/data` 用 `container.ClientId` 与 `?clientId=` 比对时失败。
+
+### 修复
+
+- 在**已通过** `Token` 与签名校验、且**即将** `Container.Create` 之前，执行 `auth.ClientId = clientId`，使 `TunnelMapping.ClientId` 与响应/客户端 URL 一致。不得早于 `GetToken` 随意改写 `auth.ClientId`，避免改变凭证/令牌解析对「空 id」的语义。
+
+### 相关文件
+
+- `internal/server/channels/monitor/auth.go`  
+- `internal/server/channels/data/new_test.go` — `TestDataChannelJSONPingWithAnonymousClientId`（`anonymous-*` 与容器一致时数据通道可升级）

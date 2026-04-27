@@ -310,6 +310,10 @@ func handleAuthenticate(
 	wsConn.Adapter = adapter
 	wsConn.mu.Unlock()
 
+	// Persist resolved id (including anonymous-*) on auth so container.ClientId matches
+	// sendAuthResponse/ client /_/data?clientId=.
+	auth.ClientId = clientId
+
 	// Create container
 	containerId := uuid.New().String()
 	matchedHTTPAuths := resolveMatchedHTTPAuths(&auth, tokenRes.Config)
