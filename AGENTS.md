@@ -579,3 +579,46 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 - `cmd/inlets/client.go`、`cmd/inlets/server.go`  
 - `README.md`、`README.zh.md`、`conf/example/client.yaml`、`AGENTS.md`  
 - `cmd/inlets/env_prefix_test.go`
+
+## 2026-04-27: 文档站点 `docs/` — VitePress + TypeScript + pnpm
+
+### 背景
+
+在仓库 `docs/` 下建立与 [go-zoox/ingress](https://github.com/go-zoox/ingress) 类似的 **自包含** 文档工程：Markdown、`docs/.vitepress/config.ts`（TypeScript）、`docs/package.json` + **pnpm**、`docs/tsconfig.json`（`typecheck` 覆盖 `.vitepress` 与 `scripts/`），静态资源在 `docs/public/`。原有 `docs/features/*.md` 纳入侧边栏，并新增 `guide/` 与首页 `index.md`。
+
+### 要点
+
+- **Node**：`package.json` 中 `engines.node` 为 **>=18.12**（Vite 5 / VitePress 1.6 在 Node 16 上构建会失败，如 `crypto.getRandomValues`）。
+- **命令**：在 `docs/` 下执行 `pnpm install`、`pnpm dev`、`pnpm build`（产物 `.vitepress/dist`）、`pnpm typecheck`。
+- **注释**：勿在块注释 `/** */` 中写含 `*/` 的子串（如 glob `**/*`），否则注释会提前结束并导致 TS 解析错误。
+
+### 相关路径
+
+- `docs/package.json`、`docs/pnpm-lock.yaml`、`docs/tsconfig.json`、`docs/.vitepress/config.ts`  
+- `docs/guide/`、`docs/features/`、`docs/zh/`（指南与专题中文镜像）、`docs/scripts/`、`docs/README.md`
+
+## 2026-04-27: 文档站点中英文切换（VitePress locales）
+
+### 做法
+
+- `.vitepress/config.ts` 使用 **`defineConfig({ locales: { root, zh } })`**：`root` 为英文（`lang: en`），`zh` 为简体中文（`lang: zh-CN`, `link: '/zh/'`），各自配置 `title` / `description` / `themeConfig.nav` / `sidebar` / `editLink` / `footer`。
+- 英文内容仍在 `docs/index.md`、`docs/guide/`、`docs/features/`；中文首页与并行路径在 **`docs/zh/`**（如 `zh/guide/`、`zh/features/`）。
+- **`NEW_PROTOCOL_ISSUES.md`** 正文以中文为主：英文路由保留 `docs/features/` 下原文件；中文路由使用 **`docs/zh/features/NEW_PROTOCOL_ISSUES.md`**（与根目录文件内容同步时可用复制；大改后记得两边或脚本对齐）。
+- 导航栏语言切换由 VitePress 在多 locale 下自动提供。
+
+### 相关路径
+
+- `docs/.vitepress/config.ts` — `locales`  
+- `docs/zh/index.md`、`docs/zh/guide/`、`docs/zh/features/`
+
+## 2026-04-27: VitePress 中 Mermaid 渲染
+
+### 根因
+
+VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普通代码或空白，需集成插件。
+
+### 做法
+
+- 依赖：`mermaid`、`vitepress-plugin-mermaid`（`docs/package.json`）。
+- 配置：`export default withMermaid(defineConfig({ ... , mermaid: { theme: 'neutral', ... } }))`（见 `docs/.vitepress/config.ts`）。
+- 流程图边上含 `+` 等字符时，使用 **引号** 包裹边文案（如 `"monitor + data"`），避免 Mermaid 解析异常。

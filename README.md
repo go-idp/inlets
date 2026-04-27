@@ -2,6 +2,8 @@
 
 A high-availability Go implementation of the inlets tunnel system, including both client and server components. It establishes long-lived WebSocket connections to securely expose local HTTP/TCP services to the public internet.
 
+**Documentation site:** the VitePress project under [`docs/`](./docs/) (`pnpm install && pnpm dev` inside that folder).
+
 ## Architecture
 
 ```mermaid
