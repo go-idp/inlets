@@ -149,6 +149,7 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 | `-p, --port` | Public TCP port on the server (`tcp` subcommand only; env: `TUNNEL_PORT`) | |
 | `-t, --token` | Token authentication | |
 | `--credentials` | `clientId:clientSecret` | |
+| `--client-id` / `--client-secret` | Client credential auth (use both); overrides `--credentials` (env: `CLIENT_ID`, `CLIENT_SECRET`) | |
 | `--server` | v2 server URL (`http://` or `https://`, optional path) | `https://inlets.zcorky.com` |
 | `-r, --remote` | Legacy server address (`host:port`) | `inlets.zcorky.com:443` |
 | `--remote-tcp-port` | Legacy server TCP callback port | `8443` |
@@ -164,6 +165,7 @@ All parameters can be configured via environment variables. Environment variable
 - `SUB_DOMAIN`: HTTP custom subdomain
 - `TOKEN`: Token authentication
 - `CREDENTIALS`: Authentication credentials (clientId:clientSecret)
+- `CLIENT_ID` / `CLIENT_SECRET`: Same as `--client-id` and `--client-secret` (when both are set, they take precedence over `CREDENTIALS`)
 - `SERVER`: v2 server URL (default: `https://inlets.zcorky.com`)
 - `REMOTE`: Legacy server address (default: `inlets.zcorky.com:443`)
 - `REMOTE_TCP_PORT`: Legacy server TCP callback port (default: `8443`)

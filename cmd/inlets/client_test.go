@@ -28,6 +28,68 @@ func hasIntFlagName(flags []cli.Flag, name string) bool {
 	return false
 }
 
+func TestResolveClientAuth(t *testing.T) {
+	t.Parallel()
+
+	t.Run("id_secret_pair_takes_precedence", func(t *testing.T) {
+		t.Parallel()
+		at, id, sec, err := resolveClientAuth("c1", "s1", "other:other", "tk")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at != "credentials" || id != "c1" || sec != "s1" {
+			t.Fatalf("got %s %q %q", at, id, sec)
+		}
+	})
+	t.Run("credentials_when_no_pair", func(t *testing.T) {
+		t.Parallel()
+		at, id, sec, err := resolveClientAuth("", "", "a:b", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at != "credentials" || id != "a" || sec != "b" {
+			t.Fatalf("got %s %q %q", at, id, sec)
+		}
+	})
+	t.Run("credentials_secret_may_contain_colons", func(t *testing.T) {
+		t.Parallel()
+		at, id, sec, err := resolveClientAuth("", "", "myid:sec:with:colons", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at != "credentials" || id != "myid" || sec != "sec:with:colons" {
+			t.Fatalf("got %s %q %q", at, id, sec)
+		}
+	})
+	t.Run("token_when_no_creds", func(t *testing.T) {
+		t.Parallel()
+		at, id, sec, err := resolveClientAuth("", "", "", "t1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at != "token" || id != "" || sec != "" {
+			t.Fatalf("got %s %q %q", at, id, sec)
+		}
+	})
+	t.Run("incomplete_id_secret", func(t *testing.T) {
+		t.Parallel()
+		_, _, _, err := resolveClientAuth("c1", "", "a:b", "")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+	t.Run("public", func(t *testing.T) {
+		t.Parallel()
+		at, _, _, err := resolveClientAuth("", "", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at != "public" {
+			t.Fatalf("got %q", at)
+		}
+	})
+}
+
 func TestLoadClientConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "client.yaml")

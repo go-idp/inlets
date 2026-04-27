@@ -24,8 +24,11 @@ http:
 # tcp:
 #   port: 20100
 
-# Authentication: use one of token or credentials
+# Authentication: one of --token, or --client-id + --client-secret (higher priority than
+# the single-line credentials), or clientId:clientSecret in one field:
 credentials: client1:secret1
+# clientId: client1
+# clientSecret: secret1
 # token: your-secret-token
 
 # Server endpoint (v2 mode, default)

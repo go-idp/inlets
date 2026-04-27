@@ -147,6 +147,7 @@ inlets client --legacy http 127.0.0.1:9000
 | `-p, --port` | 服务端公网 TCP 端口（仅 `tcp` 子命令；环境变量 `TUNNEL_PORT`） | |
 | `-t, --token` | Token 鉴权 | |
 | `--credentials` | `clientId:clientSecret` | |
+| `--client-id` / `--client-secret` | 凭证鉴权（须同时设置）；优先于 `--credentials`（环境变量 `CLIENT_ID` / `CLIENT_SECRET`） | |
 | `-r, --remote` | 服务端地址 | `inlets.zcorky.com:443` |
 | `--remote-tcp-port` | 服务端 TCP 回拨端口 | `8443` |
 | `--healthcheck-interval` | 鉴权超时 / 健康检查间隔 (ms) | `30000` |
@@ -161,6 +162,7 @@ inlets client --legacy http 127.0.0.1:9000
 - `SUB_DOMAIN`：HTTP 自定义子域
 - `TOKEN`：Token 鉴权
 - `CREDENTIALS`：Authentication credentials (clientId:clientSecret)
+- `CLIENT_ID` / `CLIENT_SECRET`：与 `--client-id`、`--client-secret` 相同；两者都设置时优先于 `CREDENTIALS`
 - `REMOTE`：服务端地址（默认：`inlets.zcorky.com:443`）
 - `REMOTE_TCP_PORT`：服务端 TCP 回拨端口（默认：`8443`）
 - `HEALTHCHECK_INTERVAL`：健康检查间隔（ms，默认：`30000`）

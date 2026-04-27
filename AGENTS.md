@@ -557,3 +557,13 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 - `internal/client/types.go` — `TunnelPort`  
 - `internal/client/client.go`、`tunnel_spec_auth.go`、`child_options.go`  
 - `README.md`、`README.zh.md`、`conf/example/client.yaml`
+
+## 2026-04-27: 客户端凭证拆分为 `--client-id` + `--client-secret`
+
+- 两者同时有值时 **优先于** 单行 `--credentials`（`clientId:clientSecret`）；`resolveClientAuth` 统一择用；`--credentials` 解析改为 `SplitN(..., 2)` 以允许 secret 中含冒号。
+- YAML 支持 `clientId` / `clientSecret`；`mergeStringFlag` 保证文件值优先于环境变量、CLI 可覆盖。
+
+### 相关文件
+
+- `cmd/inlets/client.go`、`cmd/inlets/client_test.go`（`TestResolveClientAuth`）  
+- `README.md`、`README.zh.md`、`conf/example/client.yaml`

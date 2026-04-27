@@ -43,6 +43,8 @@ type ClientFileConfig struct {
 	Port           int               `yaml:"port,omitempty"` // legacy: use when type= tcp; prefer tcp.port
 	Token          string            `yaml:"token"`
 	Credentials    string            `yaml:"credentials"`
+	ClientID       string            `yaml:"clientId"`
+	ClientSecret   string            `yaml:"clientSecret"`
 	HTTP           *ClientHTTPConfig `yaml:"http,omitempty"`
 	TCP            *ClientTCPConfig  `yaml:"tcp,omitempty"`
 	Server         string            `yaml:"server"`
@@ -150,6 +152,48 @@ func validateTransportMode(legacy, serverConfigured, remoteConfigured, remoteTCP
 	return nil
 }
 
+// resolveClientAuth picks monitor auth. If both clientID and clientSecret are non-empty (the --client-id
+// / --client-secret pair), they take precedence over --credentials. Next is --credentials (clientId:clientSecret),
+// then --token, else public.
+func resolveClientAuth(clientID, clientSecret, credentials, token string) (authType string, outID, outSecret string, err error) {
+	cid := strings.TrimSpace(clientID)
+	csec := strings.TrimSpace(clientSecret)
+	if cid != "" && csec != "" {
+		return "credentials", cid, csec, nil
+	}
+	if cid != "" || csec != "" {
+		return "", "", "", fmt.Errorf("--client-id and --client-secret must both be set, or use --credentials as clientId:clientSecret")
+	}
+	if cred := strings.TrimSpace(credentials); cred != "" {
+		parts := strings.SplitN(cred, ":", 2)
+		if len(parts) != 2 {
+			return "", "", "", fmt.Errorf("invalid credentials format, expected 'clientId:clientSecret'")
+		}
+		id, sec := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if id == "" || sec == "" {
+			return "", "", "", fmt.Errorf("invalid credentials format, expected 'clientId:clientSecret'")
+		}
+		return "credentials", id, sec, nil
+	}
+	if strings.TrimSpace(token) != "" {
+		return "token", "", "", nil
+	}
+	return "public", "", "", nil
+}
+
+// mergeStringFlag prefers the explicit --flag value, then a non-empty file value, else the flag's default
+// (e.g. environment from EnvVars) when the file is empty.
+func mergeStringFlag(cc *cli.Context, flagName, fileValue string) string {
+	v := strings.TrimSpace(fileValue)
+	if cc.IsSet(flagName) {
+		return strings.TrimSpace(cc.String(flagName))
+	}
+	if v != "" {
+		return v
+	}
+	return strings.TrimSpace(cc.String(flagName))
+}
+
 // resolveClientCtx returns the parent "client" command context (flags: token, credentials, etc.).
 func resolveClientCtx(leaf *cli.Context) *cli.Context {
 	for _, x := range leaf.Lineage() {
@@ -178,6 +222,8 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	legacy := false
 	upstreamUser := ""
 	upstreamPass := ""
+	clientIDIn := ""
+	clientSecretIn := ""
 	serverConfigured := false
 	remoteConfigured := false
 	remoteTCPConfigured := false
@@ -207,6 +253,8 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		}
 		token = strings.TrimSpace(cfg.Token)
 		credentials = strings.TrimSpace(cfg.Credentials)
+		clientIDIn = strings.TrimSpace(cfg.ClientID)
+		clientSecretIn = strings.TrimSpace(cfg.ClientSecret)
 		if strings.TrimSpace(cfg.Server) != "" {
 			server = strings.TrimSpace(cfg.Server)
 			serverConfigured = true
@@ -260,6 +308,8 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if cc.IsSet("legacy") {
 		legacy = cc.Bool("legacy")
 	}
+	clientIDIn = mergeStringFlag(cc, "client-id", clientIDIn)
+	clientSecretIn = mergeStringFlag(cc, "client-secret", clientSecretIn)
 
 	if serverConfigured {
 		normalizedServer, err := parseServerArg(server)
@@ -274,6 +324,16 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if !legacy {
 		if !serverConfigured {
 			server = "https://inlets.zcorky.com"
+		}
+	}
+
+	if subcommandType == "" {
+		at, _, _, err := resolveClientAuth(clientIDIn, clientSecretIn, credentials, token)
+		if err != nil {
+			return err
+		}
+		if at == "public" {
+			return fmt.Errorf("when http/tcp subcommand is omitted, use --token, or --client-id with --client-secret, or --credentials for server-managed tunnels")
 		}
 	}
 
@@ -300,9 +360,6 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 			}
 		}
 	default:
-		if strings.TrimSpace(credentials) == "" {
-			return fmt.Errorf("when http/tcp subcommand is omitted, --credentials is required to use server-managed tunnels")
-		}
 	}
 
 	if tunnelType != "http" && tunnelType != "tcp" {
@@ -325,23 +382,10 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		}
 	}
 
-	authType := "public"
-	var clientId, clientSecret string
-
-	if credentials != "" {
-		parts := strings.Split(credentials, ":")
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("invalid credentials format, expected 'clientId:clientSecret'")
-		}
-		clientId = parts[0]
-		clientSecret = parts[1]
-		authType = "credentials"
-	} else if token != "" {
-		authType = "token"
-	} else if tunnelType != "http" {
-		return fmt.Errorf("token or credentials is required for tcp tunnel")
+	authType, clientId, clientSecret, err := resolveClientAuth(clientIDIn, clientSecretIn, credentials, token)
+	if err != nil {
+		return err
 	}
-
 	if authType == "public" && tunnelType != "http" {
 		return fmt.Errorf("public auth only allowed for http")
 	}
@@ -453,7 +497,7 @@ Examples:
   # From config file
   inlets client -c ./conf/example/client.yaml
 
-Note: Global client flags (--token, --credentials, -s/--server, etc.) belong before the subcommand; HTTP-only flags (--sub-domain, upstream Basic auth) after "http", e.g. "inlets client -t TOKEN -s https://tunnel.example.com http --sub-domain myapp 9000".
+Note: Global client flags (--token, --client-id, --client-secret, --credentials, -s/--server, etc.) belong before the subcommand; HTTP-only flags (--sub-domain, upstream Basic auth) after "http", e.g. "inlets client -t TOKEN -s https://tunnel.example.com http --sub-domain myapp 9000". When both --client-id and --client-secret are set, they take precedence over --credentials.
 
 Transport mode note:
   - v2: use --server (supports http://host:port, http://host, https://host, https://host/path)
@@ -472,8 +516,18 @@ Transport mode note:
 			},
 			&cli.StringFlag{
 				Name:    "credentials",
-				Usage:   "Authentication credentials (clientId:clientSecret) (env: CREDENTIALS)",
+				Usage:   "Authentication as clientId:clientSecret; overridden when both --client-id and --client-secret are set (env: CREDENTIALS)",
 				EnvVars: []string{"CREDENTIALS"},
+			},
+			&cli.StringFlag{
+				Name:    "client-id",
+				Usage:   "Client ID for credential auth; use with --client-secret (higher priority than --credentials) (env: CLIENT_ID)",
+				EnvVars: []string{"CLIENT_ID"},
+			},
+			&cli.StringFlag{
+				Name:    "client-secret",
+				Usage:   "Client secret for credential auth; use with --client-id (higher priority than --credentials) (env: CLIENT_SECRET)",
+				EnvVars: []string{"CLIENT_SECRET"},
 			},
 			&cli.StringFlag{
 				Name:    "server",
