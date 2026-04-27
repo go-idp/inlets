@@ -661,3 +661,18 @@ VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普�
 - `internal/server/tunnel/tcp_relay_delay_test.go` — `TestTCPRelaySetupDelay`  
 - `internal/server/channels/monitor/capabilities_test.go` — `TestNegotiateCapabilities_TCPEarlyStreamRegister`  
 - `internal/client/capabilities_test.go` — `TestGetClientCapabilities_IncludesTCPEarlyStreamRegister`
+
+## 2026-04-27: 文档站点 — GitHub Actions 部署 GitHub Pages
+
+### 参考
+
+- 与 [go-zoox/ingress `.github/workflows/docs.yml`](https://github.com/go-zoox/ingress/blob/master/.github/workflows/docs.yml) 同构：`pnpm` 在 `docs/` 下 `install` + `build`，产物 `docs/.vitepress/dist`，`upload-pages-artifact` + `deploy-pages`；权限 `pages: write`、`id-token: write`。
+
+### 仓库设置
+
+- **Settings → Pages**：**Source** 选 **GitHub Actions**；项目页 `https://<org>.github.io/<repo>/` 时需在 VitePress 配置 **`base: '/<repo>/'`**（根站点保持 `base: '/'`）。
+
+### 相关路径
+
+- `.github/workflows/docs.yml`  
+- `docs/README.md` — 部署说明
