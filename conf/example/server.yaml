@@ -53,7 +53,7 @@ clients:
       upload: 1024000    # 1MB/s in bytes per second
       download: 1024000  # 1MB/s in bytes per second
     # Per-client tunnels (optional): with credentials, merged with the client's CLI tunnel — this process keeps
-    # your command-line type/upstream/-p/-s; other rows are started as extra client sessions (set tcp remotePort for those).
+    # your command-line type/upstream/tcp -p/--server; other rows are started as extra client sessions (set tcp remotePort for those).
     # HTTP: subDomain optional (omit to use client `http -s`). TCP: remotePort optional (0/omit = use client -p on bootstrap).
     # Extra TCP tunnels started automatically must set remotePort in YAML.
     # tunnels:

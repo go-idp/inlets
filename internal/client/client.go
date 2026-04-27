@@ -387,7 +387,7 @@ func (c *Client) authenticate() error {
 		Type:         c.opts.Type,
 		Port:         c.opts.UpstreamPort,
 		SubDomain:    c.opts.SubDomain,
-		TunnelPort:   c.opts.Port,
+		TunnelPort:   tunnelPortFromOptions(c.opts),
 		Timestamp:    timestamp,
 		AuthType:     c.opts.AuthType,
 		ClientId:     c.opts.ClientId,

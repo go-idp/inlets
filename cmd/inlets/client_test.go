@@ -9,6 +9,25 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+func intFlagNames(flags []cli.Flag) []string {
+	var out []string
+	for _, f := range flags {
+		if fl, ok := f.(*cli.IntFlag); ok {
+			out = append(out, fl.Name)
+		}
+	}
+	return out
+}
+
+func hasIntFlagName(flags []cli.Flag, name string) bool {
+	for _, n := range intFlagNames(flags) {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLoadClientConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "client.yaml")
@@ -143,12 +162,12 @@ func TestValidateTransportMode(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name              string
-		legacy            bool
-		serverConfigured  bool
-		remoteConfigured  bool
+		name                string
+		legacy              bool
+		serverConfigured    bool
+		remoteConfigured    bool
 		remoteTCPConfigured bool
-		wantErr           bool
+		wantErr             bool
 	}{
 		{name: "v2 with server only", legacy: false, serverConfigured: true, wantErr: false},
 		{name: "legacy with remote", legacy: true, remoteConfigured: true, wantErr: false},
@@ -188,5 +207,101 @@ func TestSubDomainFlagMustFollowHTTPSubcommand(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sub-domain") {
 		t.Fatalf("expected sub-domain parse error, got: %v", err)
+	}
+}
+
+func TestClientRootHasNoTunnelPortFlag(t *testing.T) {
+	t.Parallel()
+
+	root := Client()
+	if hasIntFlagName(root.Flags, "port") {
+		t.Fatal("client root must not register -p/--port (use tcp subcommand)")
+	}
+
+	var tcpCmd *cli.Command
+	for _, c := range root.Subcommands {
+		if c.Name == "tcp" {
+			tcpCmd = c
+			break
+		}
+	}
+	if tcpCmd == nil {
+		t.Fatal("expected tcp subcommand")
+	}
+	if !hasIntFlagName(tcpCmd.Flags, "port") {
+		t.Fatal("tcp subcommand must register --port for public listen port on server")
+	}
+	var portFL *cli.IntFlag
+	for _, f := range tcpCmd.Flags {
+		if fl, ok := f.(*cli.IntFlag); ok && fl.Name == "port" {
+			portFL = fl
+			break
+		}
+	}
+	if portFL == nil {
+		t.Fatal("expected *cli.IntFlag port on tcp")
+	}
+	if len(portFL.Aliases) != 1 || portFL.Aliases[0] != "p" {
+		t.Fatalf("tcp --port aliases: got %#v, want [p]", portFL.Aliases)
+	}
+}
+
+func TestClientPortFlagMustFollowTCPSubcommand(t *testing.T) {
+	t.Parallel()
+
+	app := &cli.App{
+		Name:     "inlets",
+		Commands: []*cli.Command{Client()},
+	}
+
+	err := app.Run([]string{"inlets", "client", "-p", "20100", "http", "127.0.0.1:9000"})
+	if err == nil {
+		t.Fatalf("expected error for client-level -p before http, got nil")
+	}
+	if !strings.Contains(err.Error(), "p") {
+		t.Fatalf("expected flag error mentioning -p, got: %v", err)
+	}
+}
+
+func TestLoadClientConfigTCPNestedPort(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "client.yaml")
+	err := os.WriteFile(cfgPath, []byte(`
+type: tcp
+upstream: 127.0.0.1:22
+credentials: a:b
+tcp:
+  port: 20100
+`), 0o644)
+	if err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadClientConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.TCP == nil || cfg.TCP.Port != 20100 {
+		t.Fatalf("expected tcp.port 20100, got %+v", cfg.TCP)
+	}
+}
+
+func TestLoadClientConfigTCPLegacyTopLevelPort(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "client.yaml")
+	err := os.WriteFile(cfgPath, []byte(`
+type: tcp
+upstream: 127.0.0.1:22
+credentials: a:b
+port: 20202
+`), 0o644)
+	if err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := loadClientConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Port != 20202 {
+		t.Fatalf("expected legacy top-level port 20202, got %d", cfg.Port)
 	}
 }

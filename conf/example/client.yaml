@@ -19,8 +19,10 @@ upstream: 127.0.0.1:9000
 http:
   subDomain: myapp
 
-# For tcp (public tunnel port on server)
-# port: 20100
+# For tcp: public port on the server (same as CLI: tcp -p). Older configs may use a single
+# top-level `port` when type is tcp; do not set both.
+# tcp:
+#   port: 20100
 
 # Authentication: use one of token or credentials
 credentials: client1:secret1
@@ -52,10 +54,10 @@ healthcheckInterval: 30000
 #   inlets client --server https://tunnel.example.com/base http --sub-domain myapp 127.0.0.1:9000
 #
 # TCP Tunnel with Token:
-#   inlets client -r tunnel.example.com:443 -t your-token -p 20100 tcp 127.0.0.1:22
+#   inlets client -r tunnel.example.com:443 -t your-token tcp -p 20100 127.0.0.1:22
 #
 # TCP Tunnel with Credentials:
-#   inlets client -r tunnel.example.com:443 --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
+#   inlets client -r tunnel.example.com:443 --credentials clientId:clientSecret tcp -p 20100 127.0.0.1:22
 #
 # Public HTTP Tunnel (no authentication):
 #   inlets client -r tunnel.example.com:443 http 127.0.0.1:9000
@@ -73,7 +75,7 @@ healthcheckInterval: 30000
 #   -r, --remote              Legacy server address (default: inlets.zcorky.com:443)
 #                            Example: tunnel.example.com:443 (legacy mode)
 #
-#   -p, --port                Custom tunnel port for TCP (env: TUNNEL_PORT)
+#   (on `tcp` subcommand) -p, --port — public port on server (env: TUNNEL_PORT)
 #                            Example: 20100
 #
 #   -t, --token               Authentication token (env: TOKEN)
@@ -113,7 +115,7 @@ healthcheckInterval: 30000
 #   inlets client -r tunnel.example.com:443 -t your-token http --sub-domain myapp 127.0.0.1:9000
 #
 # SSH tunnel via TCP:
-#   inlets client -r tunnel.example.com:443 --credentials client1:secret1 -p 20100 tcp 127.0.0.1:22
+#   inlets client -r tunnel.example.com:443 --credentials client1:secret1 tcp -p 20100 127.0.0.1:22
 #
 # Database tunnel via TCP:
-#   inlets client -r tunnel.example.com:443 -t your-token -p 3306 tcp 127.0.0.1:3306
+#   inlets client -r tunnel.example.com:443 -t your-token tcp -p 3306 127.0.0.1:3306

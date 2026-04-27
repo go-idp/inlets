@@ -110,10 +110,10 @@ inlets client --sub-domain myapp -t token http 127.0.0.1:9000
 
 ```bash
 # Using token
-inlets client -p 20100 -t token tcp 127.0.0.1:22
+inlets client -t token tcp -p 20100 127.0.0.1:22
 
 # Using credentials
-inlets client --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
+inlets client --credentials clientId:clientSecret tcp -p 20100 127.0.0.1:22
 ```
 
 #### Version Information
@@ -146,7 +146,7 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 | `type` | Tunnel type `http` / `tcp` | Required |
 | `upstream` | Local upstream, port or `host:port` | Required |
 | `--sub-domain` | HTTP custom subdomain (http subcommand only) | |
-| `-p, --port` | TCP tunnel port | |
+| `-p, --port` | Public TCP port on the server (`tcp` subcommand only; env: `TUNNEL_PORT`) | |
 | `-t, --token` | Token authentication | |
 | `--credentials` | `clientId:clientSecret` | |
 | `--server` | v2 server URL (`http://` or `https://`, optional path) | `https://inlets.zcorky.com` |
@@ -160,7 +160,7 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 
 All parameters can be configured via environment variables. Environment variables have lower priority than command-line arguments:
 
-- `TUNNEL_PORT`: TCP tunnel port
+- `TUNNEL_PORT`: Public TCP port on the server (used with the `tcp` subcommand)
 - `SUB_DOMAIN`: HTTP custom subdomain
 - `TOKEN`: Token authentication
 - `CREDENTIALS`: Authentication credentials (clientId:clientSecret)
@@ -265,7 +265,7 @@ inlets client --server http://127.0.0.1:8080 http 127.0.0.1:9000
 inlets client --server https://tunnel.example.com/base http --sub-domain myapp 127.0.0.1:9000
 
 # Production SSH tunnel
-inlets client --credentials prod:secret -p 20100 tcp 127.0.0.1:22
+inlets client --credentials prod:secret tcp -p 20100 127.0.0.1:22
 
 # HTTP tunnel with custom subdomain
 inlets client --sub-domain myapp -t token http 127.0.0.1:9000

@@ -35,17 +35,18 @@ const (
 )
 
 type Options struct {
-	Type                string
-	UpstreamHost        string
-	UpstreamPort        int
-	UpstreamUsername    string // HTTP tunnel: Basic auth when dialing upstream (optional)
-	UpstreamPassword    string
-	AuthType            string
-	Token               string
-	ClientId            string
-	ClientSecret        string
-	SubDomain           string
-	Port                int
+	Type             string
+	UpstreamHost     string
+	UpstreamPort     int
+	UpstreamUsername string // HTTP tunnel: Basic auth when dialing upstream (optional)
+	UpstreamPassword string
+	AuthType         string
+	Token            string
+	ClientId         string
+	ClientSecret     string
+	SubDomain        string
+	// TunnelPort is the public TCP port the server should listen on for type=tcp (0 = server assigns).
+	TunnelPort          int
 	Server              string
 	Remote              string
 	RemoteTCPPort       int
@@ -64,7 +65,7 @@ type TunnelSpec struct {
 	Type       string                `yaml:"type" json:"type"`
 	Upstream   string                `yaml:"upstream" json:"upstream"`
 	SubDomain  string                `yaml:"subDomain" json:"subDomain,omitempty"`   // HTTP: empty = use client `http -s` (or server-assigned when both empty)
-	RemotePort int                   `yaml:"remotePort" json:"remotePort,omitempty"` // TCP: 0 or omit = use client -p; else pin public listen port on server
+	RemotePort int                   `yaml:"remotePort" json:"remotePort,omitempty"` // TCP: 0 or omit = use client `tcp -p`; else pin public listen port on server
 	Auth       *HTTPIncomingAuthRule `yaml:"auth" json:"auth,omitempty"`             // HTTP: optional auth policy validated at server before forwarding.
 	// Deprecated: use auth.enable + auth.users.
 	Auths []HTTPTunnelAuth `yaml:"auths" json:"auths,omitempty"`

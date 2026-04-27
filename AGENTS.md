@@ -400,7 +400,7 @@ go func() {
 
 - **不要**在 monitor 里用 YAML 覆盖首包 `auth`，否则「服务端 tunnels」与「客户端自己指定隧道」无法并存；合并策略应是主进程按 CLI 建链，YAML 仅用于列出**额外**会话并在协调进程里 `spawn`。
 - **`opaqueChild`**：子进程必须在鉴权里标记，且 **GetToken** 对子连接不返回 `tunnels`，否则子进程会再按 YAML 拉一层，递归爆炸。
-- **匹配**：`MatchTunnelSpecIndex` + `tunnelSpecMatchesAuth` 需与 `ApplyTunnelSpecToAuthentication` / `SyncOptsFromTunnelSpec` 对 `remotePort`、`subDomain` 的规则一致（如 TCP `remotePort==0` 表示沿用客户端 `-p`）；自动起的子会话若需固定公网端口，YAML 中应写死 `remotePort`（`ChildOptionsFromSpec` 对 `remotePort==0` 会报错并提示单独起客户端或补配置）。
+- **匹配**：`MatchTunnelSpecIndex` + `tunnelSpecMatchesAuth` 需与 `ApplyTunnelSpecToAuthentication` / `SyncOptsFromTunnelSpec` 对 `remotePort`、`subDomain` 的规则一致（如 TCP `remotePort==0` 表示沿用客户端 **`tcp` 子命令的 `-p`**）；自动起的子会话若需固定公网端口，YAML 中应写死 `remotePort`（`ChildOptionsFromSpec` 对 `remotePort==0` 会报错并提示单独起客户端或补配置）。
 
 ### 相关文件
 
@@ -534,3 +534,26 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 - `internal/server/tunnel/http.go` — `Attach`（`useStream`）、`shouldStreamHTTPRequest`  
 - `internal/client/handlers.go` — `forwardHTTPRequest` / `runTCPDataChannelRelay`  
 - `internal/server/tunnel/http_websocket_test.go` — `isWebSocketUpgradeRequest`
+
+## 2026-04-27: 客户端公网 TCP 端口 (`-p`) 仅挂在 `tcp` 子命令
+
+### 背景
+
+指定服务端监听端口的 `-p` / `--port` 仅对 **TCP 隧道**有意义，不应作为 `client` 根命令上的全局项；HTTP 隧道也不应再携带该字段的语义。
+
+### 做法
+
+1. **CLI**：将 `-p`/`--port`（及 `TUNNEL_PORT`）从 `inlets client` 根级移到 **`tcp` 子命令**；用法示例为 `inlets client -t token tcp -p 20100 127.0.0.1:22`。
+2. **Options**：`client.Options` 的 `Port` 重命名为 **`TunnelPort`**，与 `Authentication.tunnelPort` 对齐；`authenticate` / `AuthSnapshotFromOptions` 通过 `tunnelPortFromOptions` 仅在 `type==tcp` 时带上公网端口。
+3. **YAML**：可选 `tcp.port`；兼容 `type: tcp` 时根级 `port`（非 HTTP）。
+
+### 审查清单
+
+- [ ] 文档/示例中的顺序是否为「全局 flag + `tcp` + `-p` + upstream」？
+
+### 相关文件
+
+- `cmd/inlets/client.go` — `runTunnelClient`、`tcp` 子命令 flags  
+- `internal/client/types.go` — `TunnelPort`  
+- `internal/client/client.go`、`tunnel_spec_auth.go`、`child_options.go`  
+- `README.md`、`README.zh.md`、`conf/example/client.yaml`

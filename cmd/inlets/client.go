@@ -32,19 +32,25 @@ type ClientHTTPConfig struct {
 	Auth      *ClientHTTPAuthConfig `yaml:"auth,omitempty"`
 }
 
+// ClientTCPConfig holds TCP tunnel–specific client options (public listen port on the server).
+type ClientTCPConfig struct {
+	Port int `yaml:"port,omitempty"`
+}
+
 type ClientFileConfig struct {
-	Type           string              `yaml:"type"`
-	Upstream       string              `yaml:"upstream"`
-	Port           int                 `yaml:"port"`
-	Token          string              `yaml:"token"`
-	Credentials    string              `yaml:"credentials"`
-	HTTP           *ClientHTTPConfig   `yaml:"http,omitempty"`
-	Server         string              `yaml:"server"`
-	Remote         string              `yaml:"remote"`
-	RemoteTCPPort  int                 `yaml:"remoteTCPPort"`
-	HealthcheckInt int                 `yaml:"healthcheckInterval"`
-	ReportURL      string              `yaml:"reportURL"`
-	Legacy         bool                `yaml:"legacy"`
+	Type           string            `yaml:"type"`
+	Upstream       string            `yaml:"upstream"`
+	Port           int               `yaml:"port,omitempty"` // legacy: use when type= tcp; prefer tcp.port
+	Token          string            `yaml:"token"`
+	Credentials    string            `yaml:"credentials"`
+	HTTP           *ClientHTTPConfig `yaml:"http,omitempty"`
+	TCP            *ClientTCPConfig  `yaml:"tcp,omitempty"`
+	Server         string            `yaml:"server"`
+	Remote         string            `yaml:"remote"`
+	RemoteTCPPort  int               `yaml:"remoteTCPPort"`
+	HealthcheckInt int               `yaml:"healthcheckInterval"`
+	ReportURL      string            `yaml:"reportURL"`
+	Legacy         bool              `yaml:"legacy"`
 }
 
 func loadClientConfig(path string) (*ClientFileConfig, error) {
@@ -193,7 +199,10 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 			upstreamHost = h
 			upstreamPort = p
 		}
-		if cfg.Port > 0 {
+		cfgType := strings.TrimSpace(cfg.Type)
+		if cfg.TCP != nil && cfg.TCP.Port > 0 {
+			port = cfg.TCP.Port
+		} else if cfg.Port > 0 && strings.EqualFold(cfgType, "tcp") {
 			port = cfg.Port
 		}
 		token = strings.TrimSpace(cfg.Token)
@@ -215,7 +224,6 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		}
 		reportURL = strings.TrimSpace(cfg.ReportURL)
 		legacy = cfg.Legacy
-		cfgType := strings.TrimSpace(cfg.Type)
 		if cfg.HTTP != nil && cfg.HTTP.Auth != nil {
 			upstreamUser = strings.TrimSpace(cfg.HTTP.Auth.Username)
 			upstreamPass = strings.TrimSpace(cfg.HTTP.Auth.Password)
@@ -225,9 +233,6 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		}
 	}
 
-	if cc.IsSet("port") {
-		port = cc.Int("port")
-	}
 	if cc.IsSet("token") {
 		token = cc.String("token")
 	}
@@ -314,6 +319,11 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		upstreamUser = ""
 		upstreamPass = ""
 	}
+	if subcommandType == "tcp" {
+		if leaf.IsSet("port") {
+			port = leaf.Int("port")
+		}
+	}
 
 	authType := "public"
 	var clientId, clientSecret string
@@ -350,7 +360,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		ClientId:       clientId,
 		ClientSecret:   clientSecret,
 		SubDomain:      subDomain,
-		Port:           port,
+		TunnelPort:     port,
 		Server:         server,
 		Remote:         remote,
 		RemoteTCPPort:  remoteTCPPort,
@@ -403,6 +413,14 @@ func Client() *cli.Command {
 		Name:      "tcp",
 		Usage:     "Expose a TCP upstream through the tunnel",
 		ArgsUsage: "[upstream]",
+		Flags: []cli.Flag{
+			&cli.IntFlag{
+				Name:    "port",
+				Aliases: []string{"p"},
+				Usage:   "Public TCP port the server should listen on (env: TUNNEL_PORT)",
+				EnvVars: []string{"TUNNEL_PORT"},
+			},
+		},
 		Action: func(c *cli.Context) error {
 			return runTunnelClient(c, "tcp")
 		},
@@ -424,10 +442,10 @@ Examples:
   inlets client http 127.0.0.1:9000 --username admin --password secret
 
   # TCP tunnel
-  inlets client -p 20100 -t your-token tcp 127.0.0.1:22
+  inlets client -t your-token tcp -p 20100 127.0.0.1:22
 
   # TCP tunnel with credentials
-  inlets client --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
+  inlets client --credentials clientId:clientSecret tcp -p 20100 127.0.0.1:22
 
   # Server-managed tunnels only (no http/tcp subcommand)
   inlets client --credentials clientId:clientSecret
@@ -445,12 +463,6 @@ Transport mode note:
 				Name:    "config",
 				Aliases: []string{"c"},
 				Usage:   "Path to client config YAML file",
-			},
-			&cli.IntFlag{
-				Name:    "port",
-				Aliases: []string{"p"},
-				Usage:   "Custom tunnel port for tcp (env: TUNNEL_PORT)",
-				EnvVars: []string{"TUNNEL_PORT"},
 			},
 			&cli.StringFlag{
 				Name:    "token",

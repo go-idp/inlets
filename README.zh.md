@@ -108,10 +108,10 @@ inlets client -s myapp -t token http 127.0.0.1:9000
 
 ```bash
 # 使用 token
-inlets client -p 20100 -t token tcp 127.0.0.1:22
+inlets client -t token tcp -p 20100 127.0.0.1:22
 
 # 使用 credentials
-inlets client --credentials clientId:clientSecret -p 20100 tcp 127.0.0.1:22
+inlets client --credentials clientId:clientSecret tcp -p 20100 127.0.0.1:22
 ```
 
 #### 查看版本信息
@@ -144,7 +144,7 @@ inlets client --legacy http 127.0.0.1:9000
 | `type` | 隧道类型 `http` / `tcp` | 必填 |
 | `upstream` | 本地 upstream，端口或 `host:port` | 必填 |
 | `-s, --sub-domain` | HTTP 自定义子域 | |
-| `-p, --port` | TCP tunnel 端口 | |
+| `-p, --port` | 服务端公网 TCP 端口（仅 `tcp` 子命令；环境变量 `TUNNEL_PORT`） | |
 | `-t, --token` | Token 鉴权 | |
 | `--credentials` | `clientId:clientSecret` | |
 | `-r, --remote` | 服务端地址 | `inlets.zcorky.com:443` |
@@ -157,7 +157,7 @@ inlets client --legacy http 127.0.0.1:9000
 
 所有参数都支持通过环境变量配置，环境变量优先级低于命令行参数：
 
-- `TUNNEL_PORT`：TCP tunnel 端口
+- `TUNNEL_PORT`：服务端公网 TCP 端口（与 `tcp` 子命令一起使用）
 - `SUB_DOMAIN`：HTTP 自定义子域
 - `TOKEN`：Token 鉴权
 - `CREDENTIALS`：Authentication credentials (clientId:clientSecret)
@@ -258,7 +258,7 @@ inlets forward -s 0.0.0.0:8080 -t 127.0.0.1:3000
 inlets client -r 127.0.0.1:8080 http 127.0.0.1:9000
 
 # 生产 SSH 隧道
-inlets client --credentials prod:secret -p 20100 tcp 127.0.0.1:22
+inlets client --credentials prod:secret tcp -p 20100 127.0.0.1:22
 
 # HTTP 隧道带自定义子域
 inlets client -s myapp -t token http 127.0.0.1:9000
