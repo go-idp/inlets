@@ -543,7 +543,7 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 
 ### 做法
 
-1. **CLI**：将 `-p`/`--port`（及 `TUNNEL_PORT`）从 `inlets client` 根级移到 **`tcp` 子命令**；用法示例为 `inlets client -t token tcp -p 20100 127.0.0.1:22`。
+1. **CLI**：将 `-p`/`--port`（及 `INLETS_TUNNEL_PORT`）从 `inlets client` 根级移到 **`tcp` 子命令**；用法示例为 `inlets client -t token tcp -p 20100 127.0.0.1:22`。
 2. **Options**：`client.Options` 的 `Port` 重命名为 **`TunnelPort`**，与 `Authentication.tunnelPort` 对齐；`authenticate` / `AuthSnapshotFromOptions` 通过 `tunnelPortFromOptions` 仅在 `type==tcp` 时带上公网端口。
 3. **YAML**：可选 `tcp.port`；兼容 `type: tcp` 时根级 `port`（非 HTTP）。
 
@@ -567,3 +567,15 @@ For upstream **chunked** responses, the client’s tunnel path was sending **de-
 
 - `cmd/inlets/client.go`、`cmd/inlets/client_test.go`（`TestResolveClientAuth`）  
 - `README.md`、`README.zh.md`、`conf/example/client.yaml`
+
+## 2026-04-27: 环境变量统一 `INLETS_` 前缀
+
+- `inlets client` 与 `inlets server` 的 CLI `EnvVars` 及 `os.Getenv` 均改为 `INLETS_*`（如 `INLETS_TOKEN`、`INLETS_DOMAIN`、`INLETS_SUB_DOMAIN`、`INLETS_SECURE` 等），避免与通用环境名冲突。文档与 `conf/example/client.yaml` 注释已同步。
+
+- 回归：`cmd/inlets/env_prefix_test.go` 遍历 `Client`/`Server`/`Forward` 子命令，断言所有 `EnvVars` 名称均以 `INLETS_` 为前缀。
+
+### 相关文件
+
+- `cmd/inlets/client.go`、`cmd/inlets/server.go`  
+- `README.md`、`README.zh.md`、`conf/example/client.yaml`、`AGENTS.md`  
+- `cmd/inlets/env_prefix_test.go`

@@ -368,7 +368,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 
 	// Parent-only + YAML http: SUB_DOMAIN is not parsed as an http subcommand flag; honor env here.
 	if tunnelType == "http" && strings.TrimSpace(subDomain) == "" && subcommandType == "" {
-		subDomain = strings.TrimSpace(os.Getenv("SUB_DOMAIN"))
+		subDomain = strings.TrimSpace(os.Getenv("INLETS_SUB_DOMAIN"))
 	}
 
 	if tunnelType != "http" {
@@ -434,18 +434,18 @@ func Client() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "sub-domain",
-				Usage:   "Public HTTP tunnel sub domain (env: SUB_DOMAIN)",
-				EnvVars: []string{"SUB_DOMAIN"},
+				Usage:   "Public HTTP tunnel sub domain (env: INLETS_SUB_DOMAIN)",
+				EnvVars: []string{"INLETS_SUB_DOMAIN"},
 			},
 			&cli.StringFlag{
 				Name:    "username",
-				Usage:   "HTTP Basic username for the local upstream (env: UPSTREAM_HTTP_USERNAME)",
-				EnvVars: []string{"UPSTREAM_HTTP_USERNAME"},
+				Usage:   "HTTP Basic username for the local upstream (env: INLETS_UPSTREAM_HTTP_USERNAME)",
+				EnvVars: []string{"INLETS_UPSTREAM_HTTP_USERNAME"},
 			},
 			&cli.StringFlag{
 				Name:    "password",
-				Usage:   "HTTP Basic password for the local upstream (env: UPSTREAM_HTTP_PASSWORD)",
-				EnvVars: []string{"UPSTREAM_HTTP_PASSWORD"},
+				Usage:   "HTTP Basic password for the local upstream (env: INLETS_UPSTREAM_HTTP_PASSWORD)",
+				EnvVars: []string{"INLETS_UPSTREAM_HTTP_PASSWORD"},
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -461,8 +461,8 @@ func Client() *cli.Command {
 			&cli.IntFlag{
 				Name:    "port",
 				Aliases: []string{"p"},
-				Usage:   "Public TCP port the server should listen on (env: TUNNEL_PORT)",
-				EnvVars: []string{"TUNNEL_PORT"},
+				Usage:   "Public TCP port the server should listen on (env: INLETS_TUNNEL_PORT)",
+				EnvVars: []string{"INLETS_TUNNEL_PORT"},
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -511,59 +511,59 @@ Transport mode note:
 			&cli.StringFlag{
 				Name:    "token",
 				Aliases: []string{"t"},
-				Usage:   "Authentication token (env: TOKEN)",
-				EnvVars: []string{"TOKEN"},
+				Usage:   "Authentication token (env: INLETS_TOKEN)",
+				EnvVars: []string{"INLETS_TOKEN"},
 			},
 			&cli.StringFlag{
 				Name:    "credentials",
-				Usage:   "Authentication as clientId:clientSecret; overridden when both --client-id and --client-secret are set (env: CREDENTIALS)",
-				EnvVars: []string{"CREDENTIALS"},
+				Usage:   "Authentication as clientId:clientSecret; overridden when both --client-id and --client-secret are set (env: INLETS_CREDENTIALS)",
+				EnvVars: []string{"INLETS_CREDENTIALS"},
 			},
 			&cli.StringFlag{
 				Name:    "client-id",
-				Usage:   "Client ID for credential auth; use with --client-secret (higher priority than --credentials) (env: CLIENT_ID)",
-				EnvVars: []string{"CLIENT_ID"},
+				Usage:   "Client ID for credential auth; use with --client-secret (higher priority than --credentials) (env: INLETS_CLIENT_ID)",
+				EnvVars: []string{"INLETS_CLIENT_ID"},
 			},
 			&cli.StringFlag{
 				Name:    "client-secret",
-				Usage:   "Client secret for credential auth; use with --client-id (higher priority than --credentials) (env: CLIENT_SECRET)",
-				EnvVars: []string{"CLIENT_SECRET"},
+				Usage:   "Client secret for credential auth; use with --client-id (higher priority than --credentials) (env: INLETS_CLIENT_SECRET)",
+				EnvVars: []string{"INLETS_CLIENT_SECRET"},
 			},
 			&cli.StringFlag{
 				Name:    "server",
 				Aliases: []string{"s"},
-				Usage:   "v2 server URL (http/https, optional path) (env: SERVER)",
+				Usage:   "v2 server URL (http/https, optional path) (env: INLETS_SERVER)",
 				Value:   "https://inlets.zcorky.com",
-				EnvVars: []string{"SERVER"},
+				EnvVars: []string{"INLETS_SERVER"},
 			},
 			&cli.StringFlag{
 				Name:    "remote",
 				Aliases: []string{"r"},
-				Usage:   "Legacy mode server address host:port (env: REMOTE)",
+				Usage:   "Legacy mode server address host:port (env: INLETS_REMOTE)",
 				Value:   "inlets.zcorky.com:443",
-				EnvVars: []string{"REMOTE"},
+				EnvVars: []string{"INLETS_REMOTE"},
 			},
 			&cli.IntFlag{
 				Name:    "remote-tcp-port",
-				Usage:   "Legacy mode server tcp port (env: REMOTE_TCP_PORT)",
+				Usage:   "Legacy mode server tcp port (env: INLETS_REMOTE_TCP_PORT)",
 				Value:   8443,
-				EnvVars: []string{"REMOTE_TCP_PORT"},
+				EnvVars: []string{"INLETS_REMOTE_TCP_PORT"},
 			},
 			&cli.IntFlag{
 				Name:    "healthcheck-interval",
-				Usage:   "Service health check interval (ms) (env: HEALTHCHECK_INTERVAL)",
+				Usage:   "Service health check interval (ms) (env: INLETS_HEALTHCHECK_INTERVAL)",
 				Value:   30000,
-				EnvVars: []string{"HEALTHCHECK_INTERVAL"},
+				EnvVars: []string{"INLETS_HEALTHCHECK_INTERVAL"},
 			},
 			&cli.StringFlag{
 				Name:    "report-url",
-				Usage:   "Error report url (env: REPORT_URL)",
-				EnvVars: []string{"REPORT_URL"},
+				Usage:   "Error report url (env: INLETS_REPORT_URL)",
+				EnvVars: []string{"INLETS_REPORT_URL"},
 			},
 			&cli.BoolFlag{
 				Name:    "legacy",
-				Usage:   "Use legacy protocol version (v1) (env: LEGACY)",
-				EnvVars: []string{"LEGACY"},
+				Usage:   "Use legacy protocol version (v1) (env: INLETS_LEGACY)",
+				EnvVars: []string{"INLETS_LEGACY"},
 			},
 		},
 		Subcommands: []*cli.Command{httpCmd, tcpCmd},

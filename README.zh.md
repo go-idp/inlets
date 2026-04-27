@@ -144,10 +144,10 @@ inlets client --legacy http 127.0.0.1:9000
 | `type` | 隧道类型 `http` / `tcp` | 必填 |
 | `upstream` | 本地 upstream，端口或 `host:port` | 必填 |
 | `-s, --sub-domain` | HTTP 自定义子域 | |
-| `-p, --port` | 服务端公网 TCP 端口（仅 `tcp` 子命令；环境变量 `TUNNEL_PORT`） | |
+| `-p, --port` | 服务端公网 TCP 端口（仅 `tcp` 子命令；环境变量 `INLETS_TUNNEL_PORT`） | |
 | `-t, --token` | Token 鉴权 | |
 | `--credentials` | `clientId:clientSecret` | |
-| `--client-id` / `--client-secret` | 凭证鉴权（须同时设置）；优先于 `--credentials`（环境变量 `CLIENT_ID` / `CLIENT_SECRET`） | |
+| `--client-id` / `--client-secret` | 凭证鉴权（须同时设置）；优先于 `--credentials`（环境变量 `INLETS_CLIENT_ID` / `INLETS_CLIENT_SECRET`） | |
 | `-r, --remote` | 服务端地址 | `inlets.zcorky.com:443` |
 | `--remote-tcp-port` | 服务端 TCP 回拨端口 | `8443` |
 | `--healthcheck-interval` | 鉴权超时 / 健康检查间隔 (ms) | `30000` |
@@ -156,18 +156,20 @@ inlets client --legacy http 127.0.0.1:9000
 
 **客户端环境变量：**
 
-所有参数都支持通过环境变量配置，环境变量优先级低于命令行参数：
+客户端相关环境变量均使用 `INLETS_` 前缀；优先级低于命令行参数：
 
-- `TUNNEL_PORT`：服务端公网 TCP 端口（与 `tcp` 子命令一起使用）
-- `SUB_DOMAIN`：HTTP 自定义子域
-- `TOKEN`：Token 鉴权
-- `CREDENTIALS`：Authentication credentials (clientId:clientSecret)
-- `CLIENT_ID` / `CLIENT_SECRET`：与 `--client-id`、`--client-secret` 相同；两者都设置时优先于 `CREDENTIALS`
-- `REMOTE`：服务端地址（默认：`inlets.zcorky.com:443`）
-- `REMOTE_TCP_PORT`：服务端 TCP 回拨端口（默认：`8443`）
-- `HEALTHCHECK_INTERVAL`：健康检查间隔（ms，默认：`30000`）
-- `REPORT_URL`：异常汇报 webhook
-- `LEGACY`：使用旧协议版本（设置为 `true`、`1` 或 `yes` 时启用）
+- `INLETS_TUNNEL_PORT`：服务端公网 TCP 端口（与 `tcp` 子命令一起使用）
+- `INLETS_SUB_DOMAIN`：HTTP 自定义子域
+- `INLETS_UPSTREAM_HTTP_USERNAME` / `INLETS_UPSTREAM_HTTP_PASSWORD`：本地 upstream Basic（`http` 子命令）
+- `INLETS_TOKEN`：Token 鉴权
+- `INLETS_CREDENTIALS`：clientId:clientSecret
+- `INLETS_CLIENT_ID` / `INLETS_CLIENT_SECRET`：与 `--client-id`、`--client-secret` 相同；两者都设置时优先于 `INLETS_CREDENTIALS`
+- `INLETS_SERVER`：v2 服务端 URL（默认：`https://inlets.zcorky.com`）
+- `INLETS_REMOTE`：服务端地址（默认：`inlets.zcorky.com:443`）
+- `INLETS_REMOTE_TCP_PORT`：服务端 TCP 回拨端口（默认：`8443`）
+- `INLETS_HEALTHCHECK_INTERVAL`：健康检查间隔（ms，默认：`30000`）
+- `INLETS_REPORT_URL`：异常汇报 webhook
+- `INLETS_LEGACY`：使用旧协议版本（设置为 `true`、`1` 或 `yes` 时启用）
 
 ### 服务端（Server）
 
@@ -200,13 +202,14 @@ inlets server -d example.com -t your-token --secure=false
 
 **服务端环境变量：**
 
-- `DOMAIN`：服务端域名
-- `SERVER_PORT`：WebSocket 服务端口（默认：`8080`）
-- `SERVER_TCP_PORT`：TCP 服务端口（默认：`8443`）
-- `SECURE`：启用 HTTPS（默认：`true`）
-- `TOKEN`：认证 Token
-- `NOTIFICATION_PROVIDER`：通知提供商
-- `NOTIFICATION_URL`：通知 webhook URL
+服务端相关环境变量均使用 `INLETS_` 前缀：
+
+- `INLETS_DOMAIN`：服务端域名
+- `INLETS_SERVER_PORT`：WebSocket 服务端口（默认：`8080`）
+- `INLETS_SERVER_TCP_PORT`：TCP 服务端口（默认：`8443`）
+- `INLETS_SECURE`：启用 HTTPS（默认：`true`）
+- `INLETS_NOTIFICATION_PROVIDER`：通知提供商
+- `INLETS_NOTIFICATION_URL`：通知 webhook URL
 
 #### 服务端配置文件
 

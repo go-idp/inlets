@@ -146,10 +146,10 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 | `type` | Tunnel type `http` / `tcp` | Required |
 | `upstream` | Local upstream, port or `host:port` | Required |
 | `--sub-domain` | HTTP custom subdomain (http subcommand only) | |
-| `-p, --port` | Public TCP port on the server (`tcp` subcommand only; env: `TUNNEL_PORT`) | |
+| `-p, --port` | Public TCP port on the server (`tcp` subcommand only; env: `INLETS_TUNNEL_PORT`) | |
 | `-t, --token` | Token authentication | |
 | `--credentials` | `clientId:clientSecret` | |
-| `--client-id` / `--client-secret` | Client credential auth (use both); overrides `--credentials` (env: `CLIENT_ID`, `CLIENT_SECRET`) | |
+| `--client-id` / `--client-secret` | Client credential auth (use both); overrides `--credentials` (env: `INLETS_CLIENT_ID`, `INLETS_CLIENT_SECRET`) | |
 | `--server` | v2 server URL (`http://` or `https://`, optional path) | `https://inlets.zcorky.com` |
 | `-r, --remote` | Legacy server address (`host:port`) | `inlets.zcorky.com:443` |
 | `--remote-tcp-port` | Legacy server TCP callback port | `8443` |
@@ -159,19 +159,20 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 
 **Client Environment Variables:**
 
-All parameters can be configured via environment variables. Environment variables have lower priority than command-line arguments:
+All client flags can be set via environment variables using the `INLETS_` prefix. These have lower priority than command-line arguments:
 
-- `TUNNEL_PORT`: Public TCP port on the server (used with the `tcp` subcommand)
-- `SUB_DOMAIN`: HTTP custom subdomain
-- `TOKEN`: Token authentication
-- `CREDENTIALS`: Authentication credentials (clientId:clientSecret)
-- `CLIENT_ID` / `CLIENT_SECRET`: Same as `--client-id` and `--client-secret` (when both are set, they take precedence over `CREDENTIALS`)
-- `SERVER`: v2 server URL (default: `https://inlets.zcorky.com`)
-- `REMOTE`: Legacy server address (default: `inlets.zcorky.com:443`)
-- `REMOTE_TCP_PORT`: Legacy server TCP callback port (default: `8443`)
-- `HEALTHCHECK_INTERVAL`: Health check interval (ms, default: `30000`)
-- `REPORT_URL`: Error report webhook
-- `LEGACY`: Use legacy protocol version (set to `true`, `1`, or `yes` to enable)
+- `INLETS_TUNNEL_PORT`: Public TCP port on the server (used with the `tcp` subcommand)
+- `INLETS_SUB_DOMAIN`: HTTP custom subdomain
+- `INLETS_UPSTREAM_HTTP_USERNAME` / `INLETS_UPSTREAM_HTTP_PASSWORD`: Local upstream Basic auth (with the `http` subcommand)
+- `INLETS_TOKEN`: Token authentication
+- `INLETS_CREDENTIALS`: Authentication credentials (clientId:clientSecret)
+- `INLETS_CLIENT_ID` / `INLETS_CLIENT_SECRET`: Same as `--client-id` and `--client-secret` (when both are set, they take precedence over `INLETS_CREDENTIALS`)
+- `INLETS_SERVER`: v2 server URL (default: `https://inlets.zcorky.com`)
+- `INLETS_REMOTE`: Legacy server address (default: `inlets.zcorky.com:443`)
+- `INLETS_REMOTE_TCP_PORT`: Legacy server TCP callback port (default: `8443`)
+- `INLETS_HEALTHCHECK_INTERVAL`: Health check interval (ms, default: `30000`)
+- `INLETS_REPORT_URL`: Error report webhook
+- `INLETS_LEGACY`: Use legacy protocol version (set to `true`, `1`, or `yes` to enable)
 
 ### Server
 
@@ -204,13 +205,14 @@ inlets server -d example.com -t your-token --secure=false
 
 **Server Environment Variables:**
 
-- `DOMAIN`: Server domain
-- `SERVER_PORT`: WebSocket service port (default: `8080`)
-- `SERVER_TCP_PORT`: TCP service port (default: `8443`)
-- `SECURE`: Enable HTTPS (default: `true`)
-- `TOKEN`: Authentication token
-- `NOTIFICATION_PROVIDER`: Notification provider
-- `NOTIFICATION_URL`: Notification webhook URL
+Server flags use the `INLETS_` prefix:
+
+- `INLETS_DOMAIN`: Server domain
+- `INLETS_SERVER_PORT`: WebSocket service port (default: `8080`)
+- `INLETS_SERVER_TCP_PORT`: TCP service port (default: `8443`)
+- `INLETS_SECURE`: Enable HTTPS (default: `true`)
+- `INLETS_NOTIFICATION_PROVIDER`: Notification provider
+- `INLETS_NOTIFICATION_URL`: Notification webhook URL
 
 #### Server Configuration File
 

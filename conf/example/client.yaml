@@ -6,7 +6,7 @@
 #
 # You can still override any field from CLI flags. Use subcommands: `http` and `tcp`.
 #
-# CLI overrides for http: `http -s ...`, `--username` / `--password` (env: UPSTREAM_HTTP_*, SUB_DOMAIN on `http`).
+# CLI overrides for http: `http -s ...`, `--username` / `--password` (env: INLETS_UPSTREAM_HTTP_*, INLETS_SUB_DOMAIN on `http`).
 # Username/password apply to your local upstream; when the server tunnel does not configure edge auth, the same Basic is enforced on the public URL (401 until curl sends Authorization).
 
 # Tunnel type: http | tcp
@@ -72,31 +72,31 @@ healthcheckInterval: 30000
 #   [upstream]     - Upstream address: port (e.g., 9000) or hostname:port (e.g., 127.0.0.1:9000)
 #
 # Optional Flags:
-#   --server                  v2 server URL (http/https, optional path) (env: SERVER)
+#   --server                  v2 server URL (http/https, optional path) (env: INLETS_SERVER)
 #                            Example: https://tunnel.example.com/base
 #
 #   -r, --remote              Legacy server address (default: inlets.zcorky.com:443)
 #                            Example: tunnel.example.com:443 (legacy mode)
 #
-#   (on `tcp` subcommand) -p, --port — public port on server (env: TUNNEL_PORT)
+#   (on `tcp` subcommand) -p, --port — public port on server (env: INLETS_TUNNEL_PORT)
 #                            Example: 20100
 #
-#   -t, --token               Authentication token (env: TOKEN)
+#   -t, --token               Authentication token (env: INLETS_TOKEN)
 #                            Example: your-secret-token
 #
-#   --credentials             Authentication credentials in format clientId:clientSecret (env: CREDENTIALS)
+#   --credentials             Authentication credentials in format clientId:clientSecret (env: INLETS_CREDENTIALS)
 #                            Example: client1:secret1
 #
-#   --remote-tcp-port         Legacy server TCP port (default: 8443, env: REMOTE_TCP_PORT)
+#   --remote-tcp-port         Legacy server TCP port (default: 8443, env: INLETS_REMOTE_TCP_PORT)
 #                            Example: 8443 (legacy mode)
 #
-#   --healthcheck-interval    Service health check interval in milliseconds (default: 30000, env: HEALTHCHECK_INTERVAL)
+#   --healthcheck-interval    Service health check interval in milliseconds (default: 30000, env: INLETS_HEALTHCHECK_INTERVAL)
 #                            Example: 30000
 #
-#   --report-url              Error report URL (env: REPORT_URL)
+#   --report-url              Error report URL (env: INLETS_REPORT_URL)
 #                            Example: https://api.example.com/report
 #
-#   --legacy                  Use legacy protocol version (v1); required when using --remote / --remote-tcp-port (env: LEGACY)
+#   --legacy                  Use legacy protocol version (v1); required when using --remote / --remote-tcp-port (env: INLETS_LEGACY)
 #                            Example: false
 #
 # Authentication Types:

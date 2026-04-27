@@ -108,27 +108,27 @@ func Server() *cli.Command {
 			&cli.StringFlag{
 				Name:    "domain",
 				Aliases: []string{"d"},
-				Usage:   "Public tunnel domain (e.g. tunnel.example.com); used in client tunnel URLs and Host matching (env: DOMAIN)",
-				EnvVars: []string{"DOMAIN"},
+				Usage:   "Public tunnel domain (e.g. tunnel.example.com); used in client tunnel URLs and Host matching (env: INLETS_DOMAIN)",
+				EnvVars: []string{"INLETS_DOMAIN"},
 			},
 			&cli.IntFlag{
 				Name:    "port",
 				Aliases: []string{"p"},
-				Usage:   "Port for server (default 8080)",
+				Usage:   "Port for server (default 8080) (env: INLETS_SERVER_PORT)",
 				Value:   8080,
-				EnvVars: []string{"SERVER_PORT"},
+				EnvVars: []string{"INLETS_SERVER_PORT"},
 			},
 			&cli.BoolFlag{
 				Name:    "secure",
 				Aliases: []string{"s"},
-				Usage:   "Use https in public tunnel URLs (default: false; override with config `secure` or SECURE env)",
+				Usage:   "Use https in public tunnel URLs (default: false; override with config `secure` or INLETS_SECURE env)",
 				Value:   false,
 			},
 			&cli.IntFlag{
 				Name:    "tcp-port",
-				Usage:   "TCP Port for server (default 8443)",
+				Usage:   "TCP Port for server (default 8443) (env: INLETS_SERVER_TCP_PORT)",
 				Value:   8443,
-				EnvVars: []string{"SERVER_TCP_PORT"},
+				EnvVars: []string{"INLETS_SERVER_TCP_PORT"},
 			},
 			&cli.StringFlag{
 				Name:    "config",
@@ -137,13 +137,13 @@ func Server() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:    "notification-provider",
-				Usage:   "Notification provider (dingtalk, feishu, wecom, slack) (env: NOTIFICATION_PROVIDER)",
-				EnvVars: []string{"NOTIFICATION_PROVIDER"},
+				Usage:   "Notification provider (dingtalk, feishu, wecom, slack) (env: INLETS_NOTIFICATION_PROVIDER)",
+				EnvVars: []string{"INLETS_NOTIFICATION_PROVIDER"},
 			},
 			&cli.StringFlag{
 				Name:    "notification-url",
-				Usage:   "Notification webhook URL (env: NOTIFICATION_URL)",
-				EnvVars: []string{"NOTIFICATION_URL"},
+				Usage:   "Notification webhook URL (env: INLETS_NOTIFICATION_URL)",
+				EnvVars: []string{"INLETS_NOTIFICATION_URL"},
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -195,11 +195,11 @@ func Server() *cli.Command {
 				}
 			}
 
-			// Priority: CLI --secure/-s > SECURE env > config file secure > default false
+			// Priority: CLI --secure/-s > INLETS_SECURE env > config file secure > default false
 			var serverSecure bool
 			if c.IsSet("secure") {
 				serverSecure = c.Bool("secure")
-			} else if sec := strings.TrimSpace(os.Getenv("SECURE")); sec != "" {
+			} else if sec := strings.TrimSpace(os.Getenv("INLETS_SECURE")); sec != "" {
 				serverSecure = sec == "true" || sec == "1" || strings.EqualFold(sec, "yes")
 			} else if configFile != nil && configFile.Secure != nil {
 				serverSecure = *configFile.Secure
