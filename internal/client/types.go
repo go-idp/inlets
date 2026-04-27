@@ -32,6 +32,10 @@ const (
 	CapabilityFlagTCPOverWS
 	CapabilityFlagTCPMultiplex
 	CapabilityFlagHTTPBodyStream // semantic HTTP head+body chunking (not WS-level message chunking)
+	// CapabilityFlagTCPEarlyStreamRegister: client registers a TCP stream placeholder when the
+	// per-stream data channel opens (before tcp:connect). New servers skip a relay-setup delay when
+	// this is negotiated; old clients omit it and rely on tcp:connect ordering + slack delay.
+	CapabilityFlagTCPEarlyStreamRegister
 )
 
 type Options struct {
@@ -192,7 +196,8 @@ func GetClientCapabilities(version string) *Capabilities {
 			CapabilityFlagFlowControl |
 			CapabilityFlagHTTPBinary |
 			CapabilityFlagTCPOverWS |
-			CapabilityFlagHTTPBodyStream,
+			CapabilityFlagHTTPBodyStream |
+			CapabilityFlagTCPEarlyStreamRegister,
 		Version: "2.0.0",
 		Features: &CapabilityFeatures{
 			Compression: &CompressionFeatures{

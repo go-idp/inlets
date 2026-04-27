@@ -552,9 +552,10 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 				if err != nil {
 					c.logger.Printf("Warning: failed to connect data channel for %s: %v", streamID, err)
 				} else {
-					// Start handling data messages for this stream
+					// Register before handleDataChannel: upload can arrive on the data WebSocket before
+					// the monitor delivers tcp:connect (separate connections / scheduling).
+					c.registerTCPStreamPlaceholder(streamID)
 					go c.handleDataChannel(streamID, conn)
-					// Notify server that data channel is ready
 					if err := c.sendMonitorMessage("data:channel:ready", map[string]interface{}{"streamId": streamID}); err != nil {
 						c.logger.Printf("Failed to send data:channel:ready for %s: %v", streamID, err)
 					}

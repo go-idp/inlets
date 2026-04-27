@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-idp/inlets/internal/client"
 	"github.com/go-idp/inlets/internal/server/protocol"
 	"github.com/go-idp/inlets/internal/server/types"
 	"github.com/go-zoox/logger"
@@ -18,6 +19,16 @@ import (
 // dataChannelReadyChan is used to signal when data channel is ready per stream
 var dataChannelReadyChan = make(map[string]chan bool)
 var dataChannelReadyMu sync.Mutex
+
+// tcpRelaySetupDelay is used before starting the TCP upload loop when the peer is an older v2
+// client that does not negotiate CapabilityFlagTCPEarlyStreamRegister.
+func tcpRelaySetupDelay(negotiatedFlags int) time.Duration {
+	if negotiatedFlags&client.CapabilityFlagTCPOverWS != 0 &&
+		negotiatedFlags&client.CapabilityFlagTCPEarlyStreamRegister == 0 {
+		return 75 * time.Millisecond
+	}
+	return 0
+}
 
 // TCPTunnel handles TCP tunnel connections
 type TCPTunnel struct {
@@ -199,18 +210,16 @@ func (t *TCPTunnel) handleSourceConnection(
 
 	streamID := fmt.Sprintf("%s:%s", containerID, requestID)
 
-	// For new protocol, ensure per-stream data channel is open before setting up stream
+	// For new protocol, ensure per-stream data channel is open before notifying the client
 	if useNewProtocol && adapter != nil {
 		if err := t.ensureDataChannelForStream(containerID, streamID, requestID, container); err != nil {
 			logger.Infof("[tunnel:tcp   ] Failed to ensure data channel for stream %s: %v", streamID, err)
 			conn.Close()
 			return
 		}
-		// New protocol: TCP over WebSocket
-		t.setupTCPStreamOverWebSocket(containerID, streamID, conn, adapter, container.WSSocket, nil)
 	}
 
-	// Notify client to connect
+	// Notify client to connect (before upload loop for new protocol so client registers/dials first)
 	tcpConnectData := map[string]interface{}{
 		"id":        containerID,
 		"requestId": requestID,
@@ -227,15 +236,26 @@ func (t *TCPTunnel) handleSourceConnection(
 		return
 	}
 
-	// Use writeMu to protect WriteMessage (gorilla/websocket requires serialized writes)
 	if container.WriteMu != nil {
 		container.WriteMu.Lock()
-		defer container.WriteMu.Unlock()
 	}
 	if err := container.WSSocket.WriteMessage(websocket.TextMessage, messageBytes); err != nil {
+		if container.WriteMu != nil {
+			container.WriteMu.Unlock()
+		}
 		logger.Infof("[tunnel:tcp   ] Failed to send tcp:connect message: %v", err)
 		conn.Close()
 		return
+	}
+	if container.WriteMu != nil {
+		container.WriteMu.Unlock()
+	}
+
+	if useNewProtocol && adapter != nil {
+		if d := tcpRelaySetupDelay(adapter.NegotiatedFlags()); d > 0 {
+			time.Sleep(d)
+		}
+		t.setupTCPStreamOverWebSocket(containerID, streamID, conn, adapter, container.WSSocket, nil)
 	}
 
 	// Connection will be closed by setupTCPStreamOverWebSocket or when legacy protocol is used

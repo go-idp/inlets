@@ -42,6 +42,14 @@ flowchart LR
 - **v2**：能力协商（流式、HTTP 头体分帧、TCP over WebSocket 等）。
 - **Legacy v1**：旧报文与端点。
 
+### TCP 流（v2）
+
+**TCP over WebSocket** 同时使用 **数据通道**（`/_/data`）与监控通道上的 **`tcp:connect`** 等消息。两条 WebSocket 互不保证时序，旧客户端可能在处理完 `tcp:connect` 之前就收到首包用户数据，从而丢弃首段字节（导致 TLS/代理握手失败）。
+
+当前客户端会协商 **`TCPEarlyStreamRegister`**：在数据通道就绪时即注册流状态。服务端在协商到该能力时不做额外延迟；未声明该能力的老 v2 客户端仍兼容：服务端在启动上行转发前短暂等待，尽量让监控通道先处理 `tcp:connect`（尽力而为）。
+
+相关测试：`internal/server/tunnel/tcp_relay_delay_test.go`、`internal/server/channels/monitor/capabilities_test.go`、`internal/client/capabilities_test.go`。
+
 详见 [新协议说明](/zh/features/NEW_PROTOCOL_ISSUES)。
 
 ## 代码地图

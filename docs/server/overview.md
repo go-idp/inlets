@@ -11,7 +11,7 @@ The **Inlets server** terminates public **HTTP** (including WebSocket upgrades) 
 
 ## Protocol
 
-- **v2** — Default for modern clients: capability negotiation, optional dedicated **data channel** (`/_/data`) for high-throughput binary frames.
+- **v2** — Default for modern clients: capability negotiation, optional dedicated **data channel** (`/_/data`) for high-throughput binary frames. TCP streams may negotiate **`TCPEarlyStreamRegister`** so the client is ready before the first relayed byte; servers apply a short compatibility delay only when that capability is absent (older v2 clients).
 - **Legacy v1** — Older wire format; clients use `--legacy` and `--remote` / `--remote-tcp-port`.
 
 ## Configuration styles

@@ -554,6 +554,16 @@ func (c *Client) handleTCPReady(payload interface{}) error {
 	return nil
 }
 
+// registerTCPStreamPlaceholder ensures tcpStreams has a nil entry for this stream so inbound
+// data-channel bytes wait (or dial) instead of being dropped before tcp:connect is handled.
+func (c *Client) registerTCPStreamPlaceholder(streamID string) {
+	c.tcpStreamsMu.Lock()
+	if _, exists := c.tcpStreams[streamID]; !exists {
+		c.tcpStreams[streamID] = nil
+	}
+	c.tcpStreamsMu.Unlock()
+}
+
 func (c *Client) handleTCPConnect(payload interface{}, remoteHost string) error {
 	dataBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -573,13 +583,8 @@ func (c *Client) handleTCPConnect(payload interface{}, remoteHost string) error 
 
 	if useNewProtocol {
 		// New protocol: TCP over WebSocket
-		// Register stream immediately to avoid race condition with tcp:data
 		streamID := fmt.Sprintf("%s:%s", connectData.ID, connectData.RequestID)
-		c.tcpStreamsMu.Lock()
-		// Use nil as placeholder - will be replaced when connection is established
-		// This ensures handleTCPData can find the stream even if data arrives before connection is ready
-		c.tcpStreams[streamID] = nil
-		c.tcpStreamsMu.Unlock()
+		c.registerTCPStreamPlaceholder(streamID)
 
 		// Now establish connection asynchronously
 		go c.forwardTCPConnectionOverWS(connectData.ID, connectData.RequestID, remoteHost)
@@ -846,7 +851,7 @@ func (c *Client) handleTCPDataBinary(messageBuffer []byte) error {
 		c.tcpStreamsMu.RUnlock()
 
 		if !found {
-			c.logger.Printf("[tcp:data][%s] stream ended before upstream ready, dropping %d bytes",
+			c.logger.Printf("[tcp:data][%s] stream not registered (closed or never opened), dropping %d bytes",
 				binaryMsg.StreamID, len(data))
 			return nil
 		}

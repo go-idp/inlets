@@ -136,6 +136,7 @@ inlets client --legacy http 127.0.0.1:9000
 **协议版本说明：**
 - **默认（v2 / 2.0.0）**：支持新协议，客户端会发送 capabilities 进行能力协商，服务端返回协商后的协议配置
 - **Legacy（v1 / 1.2.0）**：使用旧协议（legacy protocol），不发送 capabilities，完全兼容旧版本服务端
+- **TCP over WebSocket（v2）**：当前客户端会协商 **`TCPEarlyStreamRegister`**，在每条连接的数据通道就绪时即注册流状态，避免与监控通道上 `tcp:connect` 的时序竞态导致首包丢失。新服务端在该能力协商成功时不做额外延迟；未带该能力的老 v2 客户端仍可通过短延迟兼容。回归测试：`internal/server/tunnel/tcp_relay_delay_test.go`、`internal/server/channels/monitor/capabilities_test.go`、`internal/client/capabilities_test.go`。
 
 #### 客户端常用参数
 

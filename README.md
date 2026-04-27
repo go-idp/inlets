@@ -140,6 +140,7 @@ inlets client --legacy --remote tunnel.example.com:443 http 127.0.0.1:9000
 **Protocol Version Notes:**
 - **Default (v2 / 2.0.0)**: Use `--server` (HTTP/HTTPS URL). The client sends capabilities for negotiation and expects the v2 monitor endpoint.
 - **Legacy (v1 / 1.2.0)**: Use `--legacy` with `--remote` and `--remote-tcp-port`. This mode is compatible with older server versions.
+- **TCP over WebSocket (v2)**: Current clients negotiate **`TCPEarlyStreamRegister`** so stream state is registered when the per-connection data channel opens, avoiding first-packet races with `tcp:connect` on the monitor socket. New servers omit a small relay-setup delay when this bit is present; older v2 clients (without the bit) still work via that delay. Regression tests: `internal/server/tunnel/tcp_relay_delay_test.go`, `internal/server/channels/monitor/capabilities_test.go`, `internal/client/capabilities_test.go`.
 
 #### Client Common Parameters
 

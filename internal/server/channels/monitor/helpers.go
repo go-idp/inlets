@@ -22,7 +22,8 @@ var serverCapabilities = &client.Capabilities{
 		client.CapabilityFlagHTTPStreaming |
 		client.CapabilityFlagTCPOverWS |
 		client.CapabilityFlagTCPMultiplex |
-		client.CapabilityFlagHTTPBodyStream,
+		client.CapabilityFlagHTTPBodyStream |
+		client.CapabilityFlagTCPEarlyStreamRegister,
 	Version: "2.0.0",
 	Features: &client.CapabilityFeatures{
 		Compression: &client.CompressionFeatures{

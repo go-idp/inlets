@@ -622,3 +622,42 @@ VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普�
 - 依赖：`mermaid`、`vitepress-plugin-mermaid`（`docs/package.json`）。
 - 配置：`export default withMermaid(defineConfig({ ... , mermaid: { theme: 'neutral', ... } }))`（见 `docs/.vitepress/config.ts`）。
 - 流程图边上含 `+` 等字符时，使用 **引号** 包裹边文案（如 `"monitor + data"`），避免 Mermaid 解析异常。
+
+## 2026-04-27: TCP over WebSocket — 数据通道首包早于 `tcp:connect` 被丢弃
+
+### 问题现象
+
+- 客户端日志：`[tcp:data][streamId] stream ended before upstream ready, dropping N bytes`（实为 `tcpStreams` 中尚无该流）；HTTPS 经隧道代理等场景首包丢失后握手挂死。
+- 根因：监控通道与数据通道是 **两条 WebSocket**；服务端曾在 `setupTCPStreamOverWebSocket` 启动用户侧 Read 并 `SendTCPData` **之后** 才发 `tcp:connect`，客户端也仅在处理 `tcp:connect` 时注册占位，故数据面首帧可能先于控制面注册到达。
+
+### 修复要点
+
+1. **客户端**：在 `data:channel:open` 成功 `connectDataChannel` 后、`go handleDataChannel` **之前** 调用 `registerTCPStreamPlaceholder(streamId)`；`handleTCPConnect` 复用同一 helper（仅当 map 中不存在时置 `nil`），避免覆盖已有占位。
+2. **服务端**：在 `handleSourceConnection` 中，新协议在 `ensureDataChannelForStream` 成功后 **先** 发送 `tcp:connect`，**再** `setupTCPStreamOverWebSocket` 启动上传循环。
+3. 日志文案：`!found` 分支改为 `stream not registered (closed or never opened)`，避免与「流已结束」混淆。
+
+### 审查清单
+
+- [ ] 新协议下数据通道读循环开始前是否已注册 `tcpStreams` 占位？
+- [ ] 服务端是否在用户字节转发前发出 `tcp:connect`？
+
+### 向下兼容（新服务端 + 老客户端）
+
+- 协商位 **`CapabilityFlagTCPEarlyStreamRegister`**：当前客户端在 `GetClientCapabilities` 中声明；服务端 `serverCapabilities` 与之求交后写入 `NegotiatedFlags`。
+- **新客户端**：协商到该位 → 服务端 **不** 在启动 TCP 上传循环前 sleep；依赖数据通道打开时注册占位 + 先发 `tcp:connect`。
+- **老客户端**（二进制无该位）：服务端在 `setupTCPStreamOverWebSocket` 前 **`time.Sleep(75ms)`**，给监控通道处理 `tcp:connect` 留出窗口，降低首包抢跑丢字节概率（仍弱于升级客户端）。
+- **老协议**（无 capabilities）：不走数据面 TCP over WS，行为与历史一致。
+
+### 相关文件
+
+- `internal/client/types.go` — `CapabilityFlagTCPEarlyStreamRegister`、`GetClientCapabilities`  
+- `internal/server/channels/monitor/helpers.go` — `serverCapabilities`  
+- `internal/client/client.go` — `data:channel:open`  
+- `internal/client/handlers.go` — `registerTCPStreamPlaceholder`、`handleTCPConnect`、`handleTCPDataBinary`  
+- `internal/server/tunnel/tcp.go` — `handleSourceConnection`、`tcpRelaySetupDelay`
+
+### 回归测试
+
+- `internal/server/tunnel/tcp_relay_delay_test.go` — `TestTCPRelaySetupDelay`  
+- `internal/server/channels/monitor/capabilities_test.go` — `TestNegotiateCapabilities_TCPEarlyStreamRegister`  
+- `internal/client/capabilities_test.go` — `TestGetClientCapabilities_IncludesTCPEarlyStreamRegister`

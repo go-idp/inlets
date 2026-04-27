@@ -42,6 +42,14 @@ flowchart LR
 - **v2** negotiates **capabilities** (streaming, semantic HTTP head/body split, TCP over WebSocket, …).
 - **Legacy v1** uses a different wire format and endpoints.
 
+### TCP streams (v2)
+
+**TCP over WebSocket** uses a per-stream **data channel** (`/_/data`) as well as **monitor** messages such as `tcp:connect`. Because those are separate WebSockets, an older client could receive the first user bytes before it finished handling `tcp:connect` and drop the opening chunk (breaking TLS/proxy handshakes).
+
+Current clients negotiate **`TCPEarlyStreamRegister`**: they register stream state as soon as the data channel is open. The server skips an extra relay-setup delay when that bit is negotiated. Older v2 binaries that omit the bit are still supported: the server waits a short interval before starting the upload loop so the monitor path can process `tcp:connect` first (best-effort).
+
+Tests: `internal/server/tunnel/tcp_relay_delay_test.go`, `internal/server/channels/monitor/capabilities_test.go`, `internal/client/capabilities_test.go`.
+
 Implementation notes: [New protocol issues](/features/NEW_PROTOCOL_ISSUES).
 
 ## Code map (repository)
