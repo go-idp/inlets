@@ -253,7 +253,7 @@ func handleAuthenticate(
 	if blocked, reason := requiresModernClientForAdvancedFeatures(clientVersion, &auth, tokenRes.Config); blocked {
 		msg := fmt.Sprintf("client version(%s) is unsupported for this server configuration: %s", clientVersion, reason)
 		sendAuthResponse(wsConn, options, false, msg, "", nil)
-		return fmt.Errorf(msg)
+		return fmt.Errorf("client version(%s) is unsupported for this server configuration: %s", clientVersion, reason)
 	}
 
 	// Primary connection uses client CLI as-is (no YAML overlay on auth). Tunnel list is for spawning other entries.

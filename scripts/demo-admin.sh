@@ -9,8 +9,7 @@ CONFIG="${INLETS_DEMO_CONFIG:-conf/example/server.demo.yaml}"
 ADMIN_URL="${INLETS_DEMO_ADMIN_URL:-http://127.0.0.1:19090/}"
 
 echo "==> Building admin UI..."
-(cd admin && pnpm install --frozen-lockfile 2>/dev/null || pnpm install)
-(cd admin && pnpm build)
+bash scripts/ci-build-admin.sh
 
 echo "==> Seeding demo SQLite (revisions, audit, metrics)..."
 go run ./scripts/seed-admin-demo -config "$CONFIG"

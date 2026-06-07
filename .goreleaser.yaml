@@ -1,6 +1,10 @@
 env:
   - GO111MODULE=on
 
+before:
+  hooks:
+    - bash scripts/ci-build-admin.sh
+
 builds:
   - env:
       - CGO_ENABLED=0
@@ -16,6 +20,8 @@ builds:
     goarm:
       - "7"
     mod_timestamp: "{{ .CommitTimestamp }}"
+    tags:
+      - adminui
     flags:
       - -trimpath
     ldflags:

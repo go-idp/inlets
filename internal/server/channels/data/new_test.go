@@ -29,6 +29,12 @@ func (c *testTunnelCont) Set(string, string, interface{}) error { return nil }
 func (c *testTunnelCont) Remove(string)                        {}
 func (c *testTunnelCont) RegisterRequest(string, string, *net.Conn) {}
 func (c *testTunnelCont) ConnectRequest(string, string, *net.Conn) error { return nil }
+func (c *testTunnelCont) ListAll() map[string]*types.TunnelMapping {
+	if c.m == nil {
+		return map[string]*types.TunnelMapping{}
+	}
+	return map[string]*types.TunnelMapping{"ct1": c.m}
+}
 
 func TestDataChannelJSONPingReturnsPong(t *testing.T) {
 	dm := &sync.RWMutex{}
