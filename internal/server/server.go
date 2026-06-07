@@ -11,6 +11,8 @@ import (
 	datachannel "github.com/go-idp/inlets/internal/server/channels/data"
 	monitorchannel "github.com/go-idp/inlets/internal/server/channels/monitor"
 	servercontainer "github.com/go-idp/inlets/internal/server/container"
+	"github.com/go-idp/inlets/internal/server/admin"
+	"github.com/go-idp/inlets/internal/server/config"
 	"github.com/go-idp/inlets/internal/server/limiter"
 	"github.com/go-idp/inlets/internal/server/stats"
 	"github.com/go-idp/inlets/internal/server/tunnel"
@@ -35,6 +37,10 @@ type Options struct {
 	// PublicHTTPNoAuthWarnLeadTime: lead time before close warning.
 	// Zero means default 2m.
 	PublicHTTPNoAuthWarnLeadTime time.Duration
+	ConfigPath    string
+	ReloadManager *config.Manager
+	Admin         *config.ResolvedAdmin
+	PidFile       string
 }
 
 // Server represents the main server instance
@@ -46,6 +52,9 @@ type Server struct {
 	httpTunnel   *tunnel.HTTPTunnel
 	tcpTunnel    *tunnel.TCPTunnel
 	notification *monitorchannel.Notification
+	adminServer  *admin.Server
+	startedAt    time.Time
+	options      Options
 }
 
 // WebSocketMonitor manages WebSocket connections and authentication
@@ -222,6 +231,26 @@ func New(options Options) (*Server, error) {
 		httpTunnel:   httpTunnel,
 		tcpTunnel:    tcpTunnel,
 		notification: notification,
+		options:      options,
+	}
+
+	if options.Admin != nil && options.Admin.Enabled {
+		adminSrv, err := admin.New(admin.Options{
+			Resolved:      options.Admin,
+			ConfigPath:    options.ConfigPath,
+			ReloadManager: options.ReloadManager,
+			ServerVersion: options.Version,
+			Domain:        options.Domain,
+			HTTPPort:      port,
+			TCPPort:       tcpPort,
+			Secure:        options.Secure,
+			Ctx:           ctx,
+			ServerStarted: time.Now(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create admin server: %v", err)
+		}
+		server.adminServer = adminSrv
 	}
 
 	return server, nil
@@ -229,6 +258,17 @@ func New(options Options) (*Server, error) {
 
 // Start starts the server
 func (s *Server) Start() error {
+	s.startedAt = time.Now()
+	if s.adminServer != nil {
+		if err := s.adminServer.Start(); err != nil {
+			return fmt.Errorf("failed to start admin server: %v", err)
+		}
+	}
+	if s.options.PidFile != "" {
+		if err := config.WritePIDFile(s.options.PidFile); err != nil {
+			logger.Infof("[server] Warning: failed to write pid file: %v", err)
+		}
+	}
 	// Get machine IP
 	ip, err := utils.GetMachineIP()
 	if err != nil {
@@ -318,8 +358,23 @@ func (s *Server) UpdateConfig(
 	return nil
 }
 
-// Stop stops the server
+// SetReloadManager attaches the hot-reload manager after construction.
+func (s *Server) SetReloadManager(m *config.Manager) {
+	s.options.ReloadManager = m
+}
+
+// AdminServer returns the admin console server when enabled.
+func (s *Server) AdminServer() *admin.Server {
+	return s.adminServer
+}
+
 func (s *Server) Stop() error {
+	config.RemovePIDFile(s.options.PidFile)
+	if s.adminServer != nil {
+		if err := s.adminServer.Stop(); err != nil {
+			logger.Infof("[server] Error stopping admin server: %v", err)
+		}
+	}
 	// Close HTTP server
 	if s.httpServer != nil {
 		if err := s.httpServer.Close(); err != nil {

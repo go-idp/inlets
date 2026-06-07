@@ -121,3 +121,15 @@ notification:
   alert:
     provider: feishu
     url: https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_URL
+
+# Admin console (optional) — independent HTTP port, no built-in auth (use gateway)
+admin:
+  enabled: true
+  listen: 127.0.0.1:9090
+  database:
+    path: ./data/admin.db
+#   runtime:
+#     pidFile: ""                 # default: {configPath}.pid
+#     snapshotInterval: 1m
+#   ui:
+#     basePath: /
