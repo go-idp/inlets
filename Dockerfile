@@ -15,7 +15,7 @@ COPY admin/ .
 RUN pnpm build
 
 # Go binary with embedded admin SPA
-FROM --platform=$BUILDPLATFORM whatwewant/builder-go:v1.22-1 AS builder
+FROM --platform=$BUILDPLATFORM whatwewant/builder-go:v1.25-1 AS builder
 
 WORKDIR /build
 
