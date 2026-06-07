@@ -7,6 +7,7 @@ export function StatusPage() {
   const [status, setStatus] = useState<StatusData | null>(null)
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [error, setError] = useState('')
+  const [overrideSize, setOverrideSize] = useState<number | null>(null)
 
   useEffect(() => {
     Promise.all([api.status(), api.overview()])
@@ -15,12 +16,18 @@ export function StatusPage() {
         setOverview(o)
       })
       .catch((e: Error) => setError(e.message))
+    api.listOverrides().then((o) => setOverrideSize(o.size)).catch(() => { /* not configured */ })
   }, [])
 
   return (
     <>
       <PageHeader title="服务信息" subtitle="inlets server 运行时状态" />
       {error ? <div className="alert alert-danger">{error}</div> : null}
+      {overrideSize && overrideSize > 0 ? (
+        <div className="alert" style={{ background: 'rgba(232, 184, 74, 0.10)', border: '1px solid rgba(232, 184, 74, 0.35)', color: 'var(--warn)' }}>
+          ⚠ {overrideSize} 项临时覆盖生效中，进程重启后失效。
+        </div>
+      ) : null}
       <div className="panel">
         <table className="data kv-table">
           <tbody>

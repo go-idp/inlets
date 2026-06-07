@@ -45,14 +45,15 @@ type ReloadFunc func(cfg *FileConfig) error
 
 // Manager coordinates config file reload.
 type Manager struct {
-	mu   sync.Mutex
-	path string
-	ref  *Ref
-	apply ReloadFunc
+	mu       sync.Mutex
+	path     string
+	ref      *Ref
+	override *Override
+	apply    ReloadFunc
 }
 
 func NewManager(path string, ref *Ref, apply ReloadFunc) *Manager {
-	return &Manager{path: path, ref: ref, apply: apply}
+	return &Manager{path: path, ref: ref, override: NewOverride(), apply: apply}
 }
 
 func (m *Manager) Path() string {
@@ -61,6 +62,28 @@ func (m *Manager) Path() string {
 
 func (m *Manager) Ref() *Ref {
 	return m.ref
+}
+
+// Override returns the override singleton for this manager. Overrides
+// are layered on top of the on-disk config at read time and are
+// process-local; they are not persisted and vanish on restart.
+func (m *Manager) Override() *Override {
+	if m == nil {
+		return nil
+	}
+	return m.override
+}
+
+// EffectiveConfig returns the current config with all active overrides
+// applied. Callers that need to observe user-driven temporary changes
+// (the admin UI's "override" tab, for instance) should call this
+// instead of ref.Get() directly.
+func (m *Manager) EffectiveConfig() *FileConfig {
+	if m == nil {
+		return nil
+	}
+	base := m.ref.Get()
+	return m.override.Apply(base)
 }
 
 // Reload reads the config file, validates, updates ref, and applies.

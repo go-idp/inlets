@@ -1,37 +1,20 @@
-import { useEffect, useState } from 'react'
-import { api } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
+import { RevisionsPanel } from '../components/RevisionsPanel'
+import { ConfigForm } from './config/ConfigForm'
+import { ConfigSaveDialog } from './config/ConfigSaveDialog'
+import { ConfigStatusPill } from './config/ConfigStatusPill'
+import { ConfigTabs } from './config/ConfigTabs'
+import { ConfigYamlEditor } from './config/ConfigYamlEditor'
+import { OverrideBanner } from './config/OverrideBanner'
+import { OverridePanel } from './config/OverridePanel'
+import { useConfigState } from './config/useConfigState'
 
 export function ConfigPage() {
-  const [yaml, setYaml] = useState('')
-  const [path, setPath] = useState('')
-  const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    api
-      .getConfigRaw()
-      .then((r) => {
-        setYaml(r.yaml)
-        setPath(r.path)
-      })
-      .catch((e: Error) => setError(e.message))
-  }, [])
-
-  const onSave = async () => {
-    setSaving(true)
-    setError('')
-    setMessage('')
-    try {
-      await api.putConfig(yaml)
-      setMessage('配置已保存并重载')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
+  const { state, actions } = useConfigState()
+  const {
+    tab, yaml, path, schema, values, errors, topError, topOk, saving,
+    showSaveDialog, pendingDiff, summary, overrideCount, errorByPath, status,
+  } = state
 
   return (
     <>
@@ -39,21 +22,61 @@ export function ConfigPage() {
         title="配置管理"
         subtitle={path || '—'}
         actions={
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={onSave}>
-            {saving ? '保存中…' : '保存并重载'}
-          </button>
+          <>
+            <button type="button" className="btn" onClick={actions.onValidate} disabled={saving}>
+              校验
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={actions.onSave}
+              disabled={saving || status === 'err'}
+            >
+              {saving ? '保存中…' : '保存并重载'}
+            </button>
+          </>
         }
       />
-      {error ? <div className="alert alert-danger">{error}</div> : null}
-      {message ? <div className="alert alert-ok">{message}</div> : null}
-      <div className="panel">
-        <textarea
-          className="yaml-editor"
-          value={yaml}
-          onChange={(e) => setYaml(e.target.value)}
-          spellCheck={false}
+
+      {topError ? <div className="alert alert-danger">{topError}</div> : null}
+      {topOk ? <div className="alert alert-ok">{topOk}</div> : null}
+
+      <ConfigStatusPill status={status} errorCount={errors.length} />
+
+      <ConfigTabs tab={tab} onChange={actions.setTab} overrideCount={overrideCount} />
+
+      <OverrideBanner count={overrideCount} />
+
+      {tab === 'visual' && schema ? (
+        <ConfigForm
+          schema={schema}
+          values={values}
+          onFieldChange={actions.onFieldChange}
+          errorByPath={errorByPath}
         />
-      </div>
+      ) : null}
+
+      {tab === 'yaml' ? (
+        <ConfigYamlEditor value={yaml} onChange={actions.onYAMLChange} />
+      ) : null}
+
+      {tab === 'override' ? (
+        <OverridePanel onCountChange={actions.setOverrideCount} />
+      ) : null}
+
+      {tab === 'revisions' ? (
+        <RevisionsPanel currentYaml={state.rawYaml} onRestored={actions.onRestored} />
+      ) : null}
+
+      <ConfigSaveDialog
+        open={showSaveDialog}
+        saving={saving}
+        diff={pendingDiff}
+        summary={summary}
+        onSummaryChange={actions.setSummary}
+        onCancel={() => actions.setShowSaveDialog(false)}
+        onConfirm={actions.onConfirmSave}
+      />
     </>
   )
 }

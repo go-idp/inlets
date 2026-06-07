@@ -235,8 +235,12 @@ func serverRunAction(c *cli.Context) error {
 		return fmt.Errorf("failed to create server: %v", err)
 	}
 
-	reloadMgr := config.NewManager(configPath, configRef, func(cfg *config.FileConfig) error {
-		opts := config.BuildApplyOptions(cfg, ServerVersion, config.CreateGetToken(configRef, ServerVersion))
+	var reloadMgr *config.Manager
+	reloadMgr = config.NewManager(configPath, configRef, func(cfg *config.FileConfig) error {
+		// The Manager updates ref.Set(cfg) BEFORE invoking apply, so
+		// reading EffectiveConfig() now gives us ref + override.
+		effective := reloadMgr.EffectiveConfig()
+		opts := config.BuildApplyOptions(effective, ServerVersion, config.CreateGetToken(configRef, ServerVersion))
 		return srv.UpdateConfig(
 			opts.GetToken,
 			opts.Notification,
@@ -248,6 +252,7 @@ func serverRunAction(c *cli.Context) error {
 	srv.SetReloadManager(reloadMgr)
 	if srv.AdminServer() != nil {
 		srv.AdminServer().SetReloadManager(reloadMgr)
+		srv.AdminServer().SetOverride(reloadMgr.Override())
 	}
 
 	var watcher *fsnotify.Watcher

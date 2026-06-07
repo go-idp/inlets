@@ -22,6 +22,7 @@ type Options struct {
 	Resolved      *config.ResolvedAdmin
 	ConfigPath    string
 	ReloadManager *config.Manager
+	Override      *config.Override
 	ServerStarted time.Time
 	ServerVersion string
 	Domain        string
@@ -131,4 +132,10 @@ func (s *Server) Stop() error {
 func (s *Server) SetReloadManager(m *config.Manager) {
 	s.deps.ReloadManager = m
 	s.opts.ReloadManager = m
+}
+
+// SetOverride attaches the override singleton after wiring.
+func (s *Server) SetOverride(o *config.Override) {
+	s.deps.Override = o
+	s.opts.Override = o
 }

@@ -9,6 +9,7 @@ type AuditLog struct {
 	Summary   string    `gorm:"size:512" json:"summary"`
 	Actor     string    `gorm:"size:128" json:"actor"`
 	ClientIP  string    `gorm:"size:64" json:"clientIp"`
+	Diff      string    `gorm:"type:text" json:"diff,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -23,6 +24,18 @@ type MetricSnapshot struct {
 	CreatedAt     time.Time `gorm:"index" json:"createdAt"`
 }
 
+// ConfigRevision is a snapshot of the YAML config saved on each PUT.
+// Restoring a revision creates a new revision; history is append-only.
+type ConfigRevision struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	CreatedAt time.Time `gorm:"index" json:"createdAt"`
+	Actor     string    `gorm:"size:128" json:"actor"`
+	ClientIP  string    `gorm:"size:64" json:"clientIp"`
+	Summary   string    `gorm:"size:512" json:"summary"`
+	YAML      string    `gorm:"type:text" json:"yaml"`
+	BytesSize int       `json:"bytesSize"`
+}
+
 func MigrateModels() []any {
-	return []any{&AuditLog{}, &MetricSnapshot{}}
+	return []any{&AuditLog{}, &MetricSnapshot{}, &ConfigRevision{}}
 }

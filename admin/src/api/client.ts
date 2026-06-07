@@ -49,6 +49,9 @@ export type SessionRow = {
   publicEntry: string
   sourcePort?: number
   useNewProtocol: boolean
+  configIndex?: number
+  configMatch?: '' | 'exact' | 'partial' | 'missing'
+  matchIssues?: string[]
 }
 
 export type DomainRow = {
@@ -83,6 +86,48 @@ export type ConfigDocument = {
   config: unknown
 }
 
+export type FieldKind =
+  | 'string'
+  | 'int'
+  | 'port'
+  | 'bool'
+  | 'enum'
+  | 'duration'
+  | 'secret'
+
+export type GroupKind = 'object' | 'list' | 'kvMap'
+
+export type FieldDef = {
+  path: string
+  label: string
+  kind: FieldKind
+  required?: boolean
+  helpText?: string
+  placeholder?: string
+  min?: number
+  max?: number
+  enumValues?: string[]
+  default?: unknown
+  item?: FieldDef
+  valueFields?: FieldDef[]
+}
+
+export type GroupDef = {
+  key: string
+  label: string
+  path: string
+  kind: GroupKind
+  fields: FieldDef[]
+}
+
+export type ConfigSchema = {
+  schemaVersion: number
+  groups: GroupDef[]
+}
+
+export type ValidationError = { path: string; message: string }
+export type ValidationResult = { ok: boolean; errors: ValidationError[] }
+
 export type ConfigRaw = {
   path: string
   yaml: string
@@ -95,6 +140,25 @@ export type AuditRow = {
   actor: string
   clientIp: string
   createdAt: string
+  diff?: string
+}
+
+export type RevisionRow = {
+  id: number
+  createdAt: string
+  actor: string
+  clientIp: string
+  summary: string
+  bytesSize: number
+}
+
+export type RevisionDetail = RevisionRow & {
+  yaml: string
+}
+
+export type PutConfigResult = {
+  reloaded: boolean
+  revisionId?: number
 }
 
 export const api = {
@@ -105,14 +169,42 @@ export const api = {
   stats: () => request<StatsData>('/stats'),
   statsHistory: (limit = 48) =>
     request<MetricSnapshot[]>(`/stats/history?limit=${limit}`),
-  getConfig: (maskSecrets = true) =>
+  getConfig: (maskSecrets: boolean = true) =>
     request<ConfigDocument>(`/config?maskSecrets=${maskSecrets ? 'true' : 'false'}`),
   getConfigRaw: () => request<ConfigRaw>('/config/raw'),
-  putConfig: (yaml: string) =>
-    request<{ reloaded: boolean }>('/config', {
-      method: 'PUT',
+  getConfigSchema: () => request<ConfigSchema>('/config/schema'),
+  validateConfig: (yaml: string) =>
+    request<ValidationResult>('/config/validate', {
+      method: 'POST',
       body: JSON.stringify({ yaml }),
     }),
+  putConfig: (yaml: string, summary?: string) =>
+    request<PutConfigResult>('/config', {
+      method: 'PUT',
+      body: JSON.stringify({ yaml, summary: summary ?? '' }),
+    }),
+  listRevisions: (limit = 20) =>
+    request<RevisionRow[]>(`/config/revisions?limit=${limit}`),
+  getRevision: (id: number) =>
+    request<RevisionDetail>(`/config/revisions/${id}`),
+  restoreRevision: (id: number, summary?: string) =>
+    request<PutConfigResult>(`/config/revisions/${id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ summary: summary ?? '' }),
+    }),
+  listOverrides: () =>
+    request<{ entries: { path: string; value: unknown }[]; size: number }>('/overrides'),
+  setOverride: (path: string, value: unknown) =>
+    request<{ ok: boolean; size: number }>('/overrides', {
+      method: 'PUT',
+      body: JSON.stringify({ path, value }),
+    }),
+  deleteOverride: (path: string) =>
+    request<{ ok: boolean; size: number }>(`/overrides/${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    }),
+  clearAllOverrides: () =>
+    request<{ ok: boolean; size: number }>('/overrides/clear-all', { method: 'DELETE' }),
   reload: () =>
     request<{ reloaded: boolean }>('/reload', { method: 'POST' }),
   audit: (limit = 50) => request<AuditRow[]>(`/audit?limit=${limit}`),

@@ -12,12 +12,17 @@ func NewAudit() *Audit {
 	return &Audit{}
 }
 
-func (a *Audit) Record(action, summary, actor, clientIP string) (*model.AuditLog, error) {
+// Record records an action. If diff is non-empty, it is stored in
+// AuditLog.Diff. The caller chooses what to put there: a unified diff
+// (for config.save) or a JSON envelope with structured metadata
+// (e.g. {"fromId":N,"toId":M} for config.restore).
+func (a *Audit) Record(action, summary, actor, clientIP, diff string) (*model.AuditLog, error) {
 	row := &model.AuditLog{
 		Action:   action,
 		Summary:  summary,
 		Actor:    actor,
 		ClientIP: clientIP,
+		Diff:     diff,
 	}
 	if _, err := gormx.Create(row); err != nil {
 		return nil, err
