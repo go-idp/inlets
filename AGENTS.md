@@ -802,3 +802,34 @@ VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普�
 - 后端：`internal/server/config/{types,validate,reload,save,override}.go`、`internal/server/admin/{handler/api.go,service/{monitor,audit,config_service}.go,model/model.go}`
 - 前端：`admin/src/pages/ConfigPage.tsx`、`admin/src/{schema,components,api,i18n}/`
 - 文档（待写）：`docs/features/ADMIN_CONFIG_VISUALIZATION.md`、`docs/zh/features/ADMIN_CONFIG_VISUALIZATION.md`
+
+## 2026-06-08: Admin 控制台外网不可达 — listen 解析与热更新
+
+### 问题现象
+
+配置 `admin.listen: 0.0.0.0:9090` 或 `:9090` 后，外部仍无法访问；或 UI 保存 listen 后不生效。
+
+### 根因
+
+1. **`parseListen`**：`:9090` 与裸端口 `9090` 被解析为 **`127.0.0.1`**，仅本机可连；与主服务 `:8080`（全接口）行为不一致。
+2. **热更新**：`SaveRaw` / `Reload` 只更新隧道运行时字段，**admin HTTP listener 启动后不再重绑**；从 UI 改 listen 需重启进程才生效。
+3. **容器**：`Dockerfile` 未 `EXPOSE 9090`，编排时易漏映射 `-p 9090:9090`。
+
+### 修复要点
+
+1. 空 host（`:9090`）与裸端口 → **`0.0.0.0`**；显式 `127.0.0.1:9090` 仍仅本机；完全省略 listen 时默认 **`127.0.0.1:9090`**。
+2. **`Server.ReconcileAdmin`**：reload 后比对 listen/basePath，变更则 stop + 重建 admin 监听。
+3. **`Dockerfile`**：`EXPOSE 8080 8443 9090`；示例 `server.yaml` 改为 `0.0.0.0:9090` 并注释 Docker `-p`。
+
+### 审查清单
+
+- [ ] `admin.listen` 是否为 `:port` / `0.0.0.0:port` 而非隐式 localhost？
+- [ ] 改 listen 后是否触发 `ReconcileAdmin` 或需文档说明必须重启？
+- [ ] Docker/K8s 是否发布 **9090**（与配置端口一致）？
+
+### 相关文件
+
+- `internal/server/config/admin.go`、`admin_test.go`
+- `internal/server/server.go` — `ReconcileAdmin`
+- `cmd/inlets/server.go` — reload callback
+- `Dockerfile`、`conf/example/server.yaml`

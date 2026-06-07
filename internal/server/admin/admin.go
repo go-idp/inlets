@@ -128,6 +128,14 @@ func (s *Server) Stop() error {
 	return s.httpSrv.Shutdown(ctx)
 }
 
+// Resolved returns the active admin listen settings.
+func (s *Server) Resolved() *config.ResolvedAdmin {
+	if s == nil {
+		return nil
+	}
+	return s.opts.Resolved
+}
+
 // SetReloadManager updates reload manager after server wiring.
 func (s *Server) SetReloadManager(m *config.Manager) {
 	s.deps.ReloadManager = m

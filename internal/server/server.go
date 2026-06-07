@@ -358,6 +358,70 @@ func (s *Server) UpdateConfig(
 	return nil
 }
 
+// ReconcileAdmin (re)starts the admin HTTP listener when admin.listen or related
+// settings change. Hot reload updates tunnel auth and limits but admin binds its
+// own socket at startup; without this, saving 0.0.0.0:9090 in the UI would not
+// take effect until process restart.
+func (s *Server) ReconcileAdmin(cfg *config.FileConfig) error {
+	resolved, err := config.ResolveAdmin(cfg, s.options.ConfigPath)
+	if err != nil {
+		return err
+	}
+
+	wantEnabled := resolved != nil && resolved.Enabled
+	if !wantEnabled {
+		if s.adminServer != nil {
+			if err := s.adminServer.Stop(); err != nil {
+				return fmt.Errorf("stop admin server: %w", err)
+			}
+			s.adminServer = nil
+		}
+		s.options.Admin = nil
+		return nil
+	}
+
+	if s.adminServer != nil && s.options.Admin != nil && s.options.Admin.SameListen(resolved) {
+		s.options.Admin = resolved
+		return nil
+	}
+
+	if s.adminServer != nil {
+		if err := s.adminServer.Stop(); err != nil {
+			logger.Infof("[admin] stop before rebind: %v", err)
+		}
+		s.adminServer = nil
+	}
+
+	var override *config.Override
+	if s.options.ReloadManager != nil {
+		override = s.options.ReloadManager.Override()
+	}
+
+	adminSrv, err := admin.New(admin.Options{
+		Resolved:      resolved,
+		ConfigPath:    s.options.ConfigPath,
+		ReloadManager: s.options.ReloadManager,
+		Override:      override,
+		ServerVersion: s.options.Version,
+		Domain:        s.options.Domain,
+		HTTPPort:      s.options.Port,
+		TCPPort:       s.options.TCPPort,
+		Secure:        s.options.Secure,
+		Ctx:           s.ctx,
+		ServerStarted: s.startedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("create admin server: %w", err)
+	}
+	if err := adminSrv.Start(); err != nil {
+		return fmt.Errorf("start admin server: %w", err)
+	}
+	s.adminServer = adminSrv
+	s.options.Admin = resolved
+	logger.Infof("[admin] Admin listener reconfigured on http://%s:%d", resolved.Host, resolved.Port)
+	return nil
+}
+
 // SetReloadManager attaches the hot-reload manager after construction.
 func (s *Server) SetReloadManager(m *config.Manager) {
 	s.options.ReloadManager = m

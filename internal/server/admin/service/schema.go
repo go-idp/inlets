@@ -129,7 +129,7 @@ func NewConfigSchema() *ConfigSchema {
 				Key: "admin", Label: "Admin 控制台", Path: "admin", Kind: "object",
 				Fields: []*FieldDef{
 					{Path: "admin.enabled", Label: "启用", Kind: KindBool},
-					{Path: "admin.listen", Label: "监听地址", Kind: KindString, Placeholder: "127.0.0.1:9090"},
+					{Path: "admin.listen", Label: "监听地址", Kind: KindString, Placeholder: "0.0.0.0:9090"},
 				},
 			},
 		},

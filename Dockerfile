@@ -44,4 +44,6 @@ LABEL org.opencontainers.image.source="https://github.com/go-idp/inlets"
 
 COPY --from=builder /build/inlets /bin
 
+EXPOSE 8080 8443 9090
+
 CMD inlets server

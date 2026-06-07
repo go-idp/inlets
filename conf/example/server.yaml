@@ -122,10 +122,12 @@ notification:
     provider: feishu
     url: https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_URL
 
-# Admin console (optional) — independent HTTP port, no built-in auth (use gateway)
+# Admin console (optional) — independent HTTP port, no built-in auth (use gateway).
+# Use 0.0.0.0:9090 (or :9090) for remote access; 127.0.0.1 limits to localhost.
+# Docker/K8s: publish the port, e.g. docker run -p 9090:9090 ...
 admin:
   enabled: true
-  listen: 127.0.0.1:9090
+  listen: 0.0.0.0:9090
   database:
     path: ./data/admin.db
 #   runtime:

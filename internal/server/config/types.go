@@ -71,3 +71,11 @@ type ResolvedAdmin struct {
 	SnapshotInterval time.Duration
 	UIBasePath       string
 }
+
+// SameListen reports whether two resolved admin configs bind the same HTTP listener.
+func (r *ResolvedAdmin) SameListen(other *ResolvedAdmin) bool {
+	if r == nil || other == nil {
+		return r == other
+	}
+	return r.Host == other.Host && r.Port == other.Port && r.UIBasePath == other.UIBasePath
+}

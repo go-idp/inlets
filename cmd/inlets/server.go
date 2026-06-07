@@ -241,13 +241,16 @@ func serverRunAction(c *cli.Context) error {
 		// reading EffectiveConfig() now gives us ref + override.
 		effective := reloadMgr.EffectiveConfig()
 		opts := config.BuildApplyOptions(effective, ServerVersion, config.CreateGetToken(configRef, ServerVersion))
-		return srv.UpdateConfig(
+		if err := srv.UpdateConfig(
 			opts.GetToken,
 			opts.Notification,
 			opts.BandwidthLimits,
 			opts.PublicHTTPNoAuthSessionTTL,
 			opts.PublicHTTPNoAuthWarnLeadTime,
-		)
+		); err != nil {
+			return err
+		}
+		return srv.ReconcileAdmin(effective)
 	})
 	srv.SetReloadManager(reloadMgr)
 	if srv.AdminServer() != nil {

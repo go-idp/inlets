@@ -10,6 +10,7 @@ import (
 
 const (
 	defaultAdminListen   = "127.0.0.1:9090"
+	defaultAdminBindHost = "0.0.0.0"
 	defaultAdminDB       = "data/admin.db"
 	defaultSnapshotEvery = time.Minute
 )
@@ -70,15 +71,16 @@ func parseListen(listen string) (host string, port int, err error) {
 	if v == "" {
 		v = defaultAdminListen
 	}
+	// Bare port (e.g. "9090") or ":9090" bind all interfaces, matching Go net.Listen.
 	if !strings.Contains(v, ":") {
-		v = "127.0.0.1:" + v
+		v = ":" + v
 	}
 	h, p, err := net.SplitHostPort(v)
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid admin.listen %q: %w", listen, err)
 	}
 	if h == "" {
-		h = "127.0.0.1"
+		h = defaultAdminBindHost
 	}
 	portNum, err := net.LookupPort("tcp", p)
 	if err != nil {
