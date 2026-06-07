@@ -158,6 +158,7 @@ type CallbackContainer interface {
 type TunnelContainer interface {
 	Create(id string, token GetToken, wsSocket *websocket.Conn, auth *client.Authentication, writeMu *sync.Mutex)
 	Get(id string) *TunnelMapping
+	ListAll() map[string]*TunnelMapping
 	Set(id string, key string, value interface{}) error
 	Remove(id string)
 	RegisterRequest(containerId string, requestId string, sourceSocket *net.Conn)

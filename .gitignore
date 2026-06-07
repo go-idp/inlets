@@ -1,2 +1,20 @@
 inlets-client
 inlets-server
+
+# Admin UI (Vite + pnpm)
+admin/node_modules/
+admin/dist/
+
+# Admin UI prototypes (design drafts, not source of truth)
+admin/prototypes/
+
+# Admin UI built artifacts (consumed via `go:embed` under `adminui` build tag)
+internal/server/admin/static/dist/
+
+# Admin runtime data — never commit
+conf/example/data/
+*.db
+*.db-journal
+
+# Server pid file (written by config package)
+*.pid

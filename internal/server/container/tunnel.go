@@ -84,6 +84,17 @@ func (c *tunnelContainer) Get(id string) *types.TunnelMapping {
 	return c.containers[id]
 }
 
+// ListAll returns a snapshot of all tunnel mappings.
+func (c *tunnelContainer) ListAll() map[string]*types.TunnelMapping {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]*types.TunnelMapping, len(c.containers))
+	for id, m := range c.containers {
+		out[id] = m
+	}
+	return out
+}
+
 // Set sets a field value in a tunnel mapping
 func (c *tunnelContainer) Set(id string, key string, value interface{}) error {
 	c.mu.Lock()

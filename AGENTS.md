@@ -696,3 +696,109 @@ VitePress **默认不处理** ` ```mermaid ` 代码块，页面会显示为普�
 
 - `internal/server/channels/monitor/auth.go`  
 - `internal/server/channels/data/new_test.go` — `TestDataChannelJSONPingWithAnonymousClientId`（`anonymous-*` 与容器一致时数据通道可升级）
+
+## 2026-06-07: 配置管理可视化 —— 实施方案（仅 plan，未动代码）
+
+### 背景
+
+`feat/admin-ui` 提交（`5456e4d`）落地了 admin 控制台后端：结构化 `FileConfig` + `Validate` + 原子写 `SaveRawAtomic` + `Manager.Reload` + `AuditLog` + SQLite 历史/快照。但前端 `ConfigPage.tsx` 是 30 行 textarea——后端"半个现代化"，前端仍退回手写 YAML。可视化的人机交互收益（结构校验、Diff、回滚、覆盖、匹配视图）尚未兑现。
+
+### 用户决定（本次会话）
+
+- **范围**：先不动手，要**详细 plan**。
+- **Secret 字段**：保持后端 mask 现状（不在 schema 层重新设计）；前端用 useRef 保留原始值，提交时回填。
+- **历史版本**：存 **SQLite 新表 `ConfigRevision`**（与 `AuditLog` 同库），不另起文件系统 snapshot。
+- **Override 层**：**需要**（进程内临时覆盖、不落盘、不持久化）。
+- **文档**：**中英双语**（`docs/features/ADMIN_CONFIG_VISUALIZATION.md` + `docs/zh/features/...`）。
+- **YAML 注释丢失**：**接受**（UI 编辑后回写会丢注释，文档明示）。
+- **schema 之外的额外字段**：**pass-through**（UI 渲染+回写时保留 Go 不认识的字段，避免升级期丢配置）。
+
+### 推荐 PR 拆分（按此顺序推进）
+
+#### PR-1：结构化表单 + 即时校验
+
+后端：
+- 新增 `POST /api/config/validate`：复用 `parseDocument` + 新版 `validateWithDetails(cfg) []ValidationError`。
+- `validate.go` 拆分：`Validate(cfg) error` 调 `validateWithDetails` 并 `errors.Join`。
+- 增强 `GET /api/config?format=structure`：返回 **UI schema hints**（groups、fields、kind、enum、min/max、placeholder）；用 `service.NewConfigSchema()` 纯函数实现。
+- 不动现有 PUT 链路（仍是 yaml-in / yaml-out / reload / audit）。
+
+前端：
+- `admin/src/schema/{types.ts, renderers.tsx, serialize.ts}`：控件库（`TextInput` / `NumberInput` / `Switch` / `Select` / `DurationInput` / `SecretInput` / `CardList` / `KeyValueTable` / `FieldGroup`）。
+- `ConfigPage` 重写：tab "可视化 / YAML 源"；分组渲染；字段失焦校验 + 顶部绿/黄/红指示灯；底部"校验 / 保存"。
+
+关键测试：
+- `validate_test.go`：错误路径断言（`"clients[2].clientSecret"`）。
+- `admin/src/schema/serialize.test.ts`：**回环测试**（JSON → YAML → `Load` → 等价 `FileConfig`）。
+
+#### PR-2：Diff 预览 + 历史版本与回滚
+
+后端：
+- `AuditLog` 增 `Diff string \`gorm:"type:text"\``；`audit.Record(..., metadata map[string]any)`。
+- 新表 `ConfigRevision { id, createdAt, actor, clientIp, summary, yaml, bytesSize }`，加入 `MigrateModels()`。
+- `service.ConfigService.SaveRaw`：先读旧值 → 入 revision 表（**同事务**）→ 再 `SaveRawAtomic`。
+- API：
+  - `GET /api/config/revisions?limit=20`
+  - `GET /api/config/revisions/{id}`
+  - `POST /api/config/revisions/{id}/restore`（带 audit `"config.restore"`, `fromId` / `toId`）
+- 清理策略：revision 数量超 `admin.revisions.maxKeep`（默认 200）时按时间窗合并。
+- **关键安全**：diff 文本**不**含 secret（save 走 mask 后的 raw 算 diff）。
+
+前端：
+- `ConfigPage` 保存前弹 Diff 模态框（红/绿/灰行级高亮 + summary 文本框）。
+- 历史时间线抽屉 + "恢复此版本"二次确认（revert diff 预览）。
+- `AuditPage` 增加 inline diff 展开 + 时间筛选（24h / 7d / 30d / all）。
+
+#### PR-3：运行时临时覆盖（Override 层）
+
+设计原则（**避免踩上文"过早释放锁"教训**）：override 在 `Ref` **外面**包一层，**不修改 `*FileConfig`**，避免污染 YAML 序列化。
+
+- 新类型 `internal/server/config/override.go`：
+  - `Override { mu sync.RWMutex; patches map[string]any }`
+  - `Apply(base *FileConfig) *FileConfig`（深拷贝 + apply patches）
+  - `Set / Clear / ClearAll`
+  - 路径语法 `a.b[0].c` → segments
+- 接入运行时：所有读路径（`GetToken`、monitor）改为 `override.Apply(ref.Get())`，**不在 `Get()` 内做**。
+- audit 新增 `"config.override.set"` / `"config.override.clear"`。
+- API：`GET / PUT / DELETE /api/overrides[/{path}]`、`POST /api/overrides/clear-all`，**不写文件、不落 SQLite**。
+
+前端：
+- `ConfigPage` tab 加 "临时覆盖"：共用 schema、改过的字段红色背景 + 角标"临时"、顶部"清空全部"。
+- `StatusPage` 黄色 banner："X 项临时覆盖生效中，进程重启后失效"。
+
+测试：
+- `override_test.go`：path 解析、apply 正确性、`-race` 跑并发。
+- **patch 路径错误 fail-fast**，不悄悄忽略。
+
+#### PR-4：Sessions ↔ Config 匹配视图
+
+后端：
+- `SessionView` 增 `ConfigIndex *int`、`ConfigMatch string`（`exact` / `partial` / `missing`）、`MatchIssues []string`。
+- `Monitor.Sessions()` 按 `tm.ClientId == c.ClientID` 找匹配；`exact` = clientId 匹配 + secret 一致（**只比哈希/不展示明文**）；`missing` = `anonymous-*` 等。
+
+前端：
+- `SessionsPage` 新列"配置"：✓ / ⚠ / ✗ + 第 N 项；筛选器；点击跳 ConfigPage 第 N 项并高亮。
+
+### 跨 PR 共用约定
+
+- 所有新 API 单点注册在 `handler.API.Mount`。
+- 写操作一律 `audit.Record(...)`，无遗漏。
+- 并发热点（`Ref` / `Override` / `Revision`）必须有 `-race` 测试。
+- 前端：单职责组件、共享 `app.css`、文案走 `i18n/zh.ts`。
+- 文档：本次同时落 `docs/features/ADMIN_CONFIG_VISUALIZATION.md`（英文）与 `docs/zh/features/...`（中文镜像）。
+
+### 风险与回退
+
+| 风险 | 缓解 |
+|---|---|
+| YAML 注释回写丢失 | 文档明示；保留 "YAML 源" tab 作逃生通道 |
+| override 与 Ref 并发 | `mu.RLock` + 拷贝路径；不修改 `*FileConfig` |
+| Revision 无限增长 | 清理策略 + `admin.revisions.maxKeep` 配置项 |
+| 错改 secret | UI 二次确认 + audit diff 不含 secret |
+| 新增 schema 字段 UI 暂未识别 | pass-through：未识别字段保留在 YAML 中 |
+
+### 相关文件
+
+- 后端：`internal/server/config/{types,validate,reload,save,override}.go`、`internal/server/admin/{handler/api.go,service/{monitor,audit,config_service}.go,model/model.go}`
+- 前端：`admin/src/pages/ConfigPage.tsx`、`admin/src/{schema,components,api,i18n}/`
+- 文档（待写）：`docs/features/ADMIN_CONFIG_VISUALIZATION.md`、`docs/zh/features/ADMIN_CONFIG_VISUALIZATION.md`

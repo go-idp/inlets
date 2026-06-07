@@ -63,6 +63,7 @@ const enSidebar: DefaultTheme.SidebarItem[] = [
     text: 'Deep dives',
     collapsed: true,
     items: [
+      { text: 'Admin config visualization', link: '/features/ADMIN_CONFIG_VISUALIZATION' },
       { text: 'Public monitor session TTL', link: '/features/PUBLIC_MONITOR_SESSION' },
       { text: 'New protocol notes', link: '/features/NEW_PROTOCOL_ISSUES' },
       { text: 'Release notes (2026-03-15)', link: '/features/RELEASE_NOTES_2026-03-15' },
@@ -122,6 +123,7 @@ const zhSidebar: DefaultTheme.SidebarItem[] = [
     text: '专题',
     collapsed: true,
     items: [
+      { text: 'Admin 配置管理可视化', link: '/zh/features/ADMIN_CONFIG_VISUALIZATION' },
       { text: '公共监控会话时限', link: '/zh/features/PUBLIC_MONITOR_SESSION' },
       { text: '新协议说明', link: '/zh/features/NEW_PROTOCOL_ISSUES' },
       { text: '发行说明（2026-03-15）', link: '/zh/features/RELEASE_NOTES_2026-03-15' },

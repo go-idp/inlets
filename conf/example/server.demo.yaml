@@ -1,0 +1,192 @@
+domain: tunnel.acme-corp.io
+port: 18080
+tcpPort: 18443
+secure: true
+token: demo-shared-token-8k2m9x
+publicHTTPNoAuth:
+  timeout: 15m
+  warnLead: 2m
+clients:
+  - clientId: acme-web-prod
+    clientSecret: prod-secret-7f3a9c2e1b4d
+    config:
+      version: 2.0.0
+    bandwidthLimit:
+      upload: 5242880
+      download: 10485760
+    tunnels:
+      - name: api
+        type: http
+        upstream: 127.0.0.1:3000
+        subDomain: api
+      - name: admin
+        type: http
+        upstream: 127.0.0.1:3001
+        subDomain: admin
+      - name: metrics
+        type: http
+        upstream: 127.0.0.1:9091
+        subDomain: metrics
+  - clientId: acme-web-staging
+    clientSecret: staging-secret-b4e81d0a
+    tunnels:
+      - name: web
+        type: http
+        upstream: 127.0.0.1:8080
+        subDomain: staging
+      - name: preview
+        type: http
+        upstream: 127.0.0.1:8082
+        subDomain: preview
+  - clientId: infra-bastion
+    clientSecret: bastion-secret-x9k2m5p8
+    tunnels:
+      - name: ssh
+        type: tcp
+        upstream: 127.0.0.1:22
+        remotePort: 22022
+      - name: postgres
+        type: tcp
+        upstream: 127.0.0.1:5432
+        remotePort: 25432
+  - clientId: ci-runner-01
+    clientSecret: ci-secret-q8w7e6r5
+    bandwidthLimit:
+      upload: 2097152
+      download: 2097152
+    tunnels:
+      - name: deploy-agent
+        type: tcp
+        upstream: 127.0.0.1:8022
+        remotePort: 28022
+  - clientId: partner-webhook
+    clientSecret: partner-secret-n3p5t2v7
+    tunnels:
+      - name: hooks
+        type: http
+        upstream: 127.0.0.1:4000
+        subDomain: hooks
+bandwidthLimits:
+  global:
+    upload: 1048576
+    download: 2097152
+  clients:
+    acme-web-prod:
+      upload: 5242880
+      download: 10485760
+    ci-runner-01:
+      upload: 2097152
+      download: 2097152
+notification:
+  provider: feishu
+  url: https://open.feishu.cn/open-apis/bot/v2/hook/demo-webhook-token
+  interval: 300
+admin:
+  enabled: true
+  listen: 127.0.0.1:19090
+  database:
+    path: ./data/admin.demo.db
+  runtime:
+    snapshotInterval: 1m
+  ui:
+    basePath: /
+Domain: tunnel.acme-corp.io
+Port: 18080
+TCPPort: 18443
+Secure: true
+Token: demo-shared-token-8k2m9x
+Clients:
+  - ClientID: acme-web-prod
+    ClientSecret: prod-secret-7f3a9c2e1b4d
+    Config:
+      version: 2.0.0
+    BandwidthLimit:
+      UploadBytesPerSecond: 5242880
+      DownloadBytesPerSecond: 10485760
+    Tunnels:
+      - name: api
+        type: http
+        upstream: 127.0.0.1:3000
+        subDomain: api
+      - name: admin
+        type: http
+        upstream: 127.0.0.1:3001
+        subDomain: admin
+      - name: metrics
+        type: http
+        upstream: 127.0.0.1:9091
+        subDomain: metrics
+  - ClientID: acme-web-staging
+    ClientSecret: staging-secret-b4e81d0a
+    Config: null
+    BandwidthLimit: null
+    Tunnels:
+      - name: web
+        type: http
+        upstream: 127.0.0.1:8080
+        subDomain: staging
+      - name: preview
+        type: http
+        upstream: 127.0.0.1:8082
+        subDomain: preview
+  - ClientID: infra-bastion
+    ClientSecret: bastion-secret-x9k2m5p8
+    Config: null
+    BandwidthLimit: null
+    Tunnels:
+      - name: ssh
+        type: tcp
+        upstream: 127.0.0.1:22
+        remotePort: 22022
+      - name: postgres
+        type: tcp
+        upstream: 127.0.0.1:5432
+        remotePort: 25432
+  - ClientID: ci-runner-01
+    ClientSecret: ci-secret-q8w7e6r5
+    Config: null
+    BandwidthLimit:
+      UploadBytesPerSecond: 2097152
+      DownloadBytesPerSecond: 2097152
+    Tunnels:
+      - name: deploy-agent
+        type: tcp
+        upstream: 127.0.0.1:8022
+        remotePort: 28022
+  - ClientID: partner-webhook
+    ClientSecret: partner-secret-n3p5t2v7
+    Config: null
+    BandwidthLimit: null
+    Tunnels:
+      - name: hooks
+        type: http
+        upstream: 127.0.0.1:4000
+        subDomain: hooks
+Notification:
+  provider: feishu
+  url: https://open.feishu.cn/open-apis/bot/v2/hook/demo-webhook-token
+  interval: 300
+BandwidthLimits:
+  Global:
+    UploadBytesPerSecond: 1048576
+    DownloadBytesPerSecond: 2097152
+  Clients:
+    acme-web-prod:
+      UploadBytesPerSecond: 5242880
+      DownloadBytesPerSecond: 10485760
+    ci-runner-01:
+      UploadBytesPerSecond: 2097152
+      DownloadBytesPerSecond: 2097152
+PublicHTTPNoAuth:
+  Timeout: 15m
+  WarnLead: 2m
+Admin:
+  Enabled: true
+  Listen: 127.0.0.1:19090
+  Database:
+    Path: ./data/admin.demo.db
+  Runtime:
+    PidFile: ""
+    SnapshotInterval: 1m
+  UI:
+    BasePath: /
