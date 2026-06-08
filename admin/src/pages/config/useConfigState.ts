@@ -3,6 +3,7 @@ import { api, type ConfigSchema, type FieldDef, type ValidationError } from '../
 import { computeDiff } from '../../components/DiffViewer'
 import { getByPath, setByPath } from '../../schema/renderers'
 import { serializeValuesToYAML } from '../../schema/serialize'
+import { valuesFromYAML } from './parseValues'
 import { collectSecrets, SECRET_PLACEHOLDER } from './secrets'
 
 type Tab = 'visual' | 'yaml' | 'override' | 'revisions'
@@ -31,9 +32,8 @@ export function useConfigState() {
     let cancelled = false
     async function load() {
       try {
-        const [raw, doc, sch] = await Promise.all([
+        const [raw, sch] = await Promise.all([
           api.getConfigRaw(),
-          api.getConfig(false),
           api.getConfigSchema(),
         ])
         if (cancelled) return
@@ -41,7 +41,9 @@ export function useConfigState() {
         setYaml(raw.yaml)
         setPath(raw.path)
         setSchema(sch)
-        const cfg = (doc.config as any) ?? {}
+        // Structured GET /config uses Go JSON field names (Domain, TCPPort, …) which
+        // do not match schema paths (domain, tcpPort, …). Parse raw YAML instead.
+        const cfg = valuesFromYAML(raw.yaml)
         setValues(cfg)
         secretsRef.current = collectSecrets(cfg, sch)
         const result = await api.validateConfig(raw.yaml)
@@ -124,12 +126,26 @@ export function useConfigState() {
     }
   }, [tab, yaml, buildYAMLFromValues, rawYaml])
 
+  const setTabWithSync = useCallback((next: Tab) => {
+    if (next === 'visual' && tab === 'yaml' && yaml.trim()) {
+      try {
+        const parsed = valuesFromYAML(yaml)
+        setValues(parsed)
+        secretsRef.current = collectSecrets(parsed, schema)
+      } catch {
+        /* keep existing values when YAML tab has parse errors */
+      }
+    }
+    setTab(next)
+  }, [tab, yaml, schema])
+
   const refreshFromServer = useCallback(async () => {
-    const [raw, doc] = await Promise.all([api.getConfigRaw(), api.getConfig(false)])
+    const raw = await api.getConfigRaw()
     setRawYaml(raw.yaml)
     setYaml(raw.yaml)
-    setValues(doc.config as any)
-    secretsRef.current = collectSecrets(doc.config as any, schema)
+    const cfg = valuesFromYAML(raw.yaml)
+    setValues(cfg)
+    secretsRef.current = collectSecrets(cfg, schema)
     const result = await api.validateConfig(raw.yaml)
     setErrors(result.errors ?? [])
   }, [schema])
@@ -182,7 +198,7 @@ export function useConfigState() {
       showSaveDialog, pendingYAML, pendingDiff, summary, overrideCount, errorByPath, status,
     },
     actions: {
-      setTab, setSummary, setShowSaveDialog,
+      setTab: setTabWithSync, setSummary, setShowSaveDialog,
       onFieldChange, onYAMLChange, onSave, onConfirmSave, onValidate, onRestored,
       setOverrideCount,
     },
