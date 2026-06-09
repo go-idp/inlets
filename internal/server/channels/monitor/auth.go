@@ -390,7 +390,10 @@ func handleAuthenticate(
 		}
 
 		logger.Infof("[monitor:ws][%s][domain] %s.%s", clientId, *subDomain, options.Domain)
+	} else if strings.TrimSpace(auth.Type) == "" {
+		logger.Infof("[monitor:ws][%s] coordinator session (no local tunnel)", clientId)
 	} else {
+		sendAuthResponse(wsConn, options, false, fmt.Sprintf("unknown tunnel type %q", auth.Type), "", nil)
 		return fmt.Errorf("unknown authentication type: %s", auth.Type)
 	}
 

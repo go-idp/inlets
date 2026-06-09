@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,93 @@ func hasIntFlagName(flags []cli.Flag, name string) bool {
 		}
 	}
 	return false
+}
+
+func testClientRootContext(t *testing.T, argv []string) *cli.Context {
+	t.Helper()
+	cmd := Client()
+	set := flag.NewFlagSet("test", flag.ContinueOnError)
+	for _, f := range cmd.Flags {
+		if err := f.Apply(set); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := set.Parse(argv); err != nil {
+		t.Fatal(err)
+	}
+	ctx := cli.NewContext(nil, set, nil)
+	ctx.Command = cmd
+	return ctx
+}
+
+func testClientHTTPContext(t *testing.T, argv []string) *cli.Context {
+	t.Helper()
+	cmd := Client()
+	var httpCmd *cli.Command
+	for _, c := range cmd.Subcommands {
+		if c.Name == "http" {
+			httpCmd = c
+			break
+		}
+	}
+	if httpCmd == nil {
+		t.Fatal("missing http subcommand")
+	}
+
+	parentSet := flag.NewFlagSet("client", flag.ContinueOnError)
+	for _, f := range cmd.Flags {
+		if err := f.Apply(parentSet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parentCtx := cli.NewContext(nil, parentSet, nil)
+	parentCtx.Command = cmd
+
+	leafSet := flag.NewFlagSet("http", flag.ContinueOnError)
+	for _, f := range httpCmd.Flags {
+		if err := f.Apply(leafSet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := leafSet.Parse(argv); err != nil {
+		t.Fatal(err)
+	}
+	leafCtx := cli.NewContext(nil, leafSet, parentCtx)
+	leafCtx.Command = httpCmd
+	return leafCtx
+}
+
+func TestBuildClientOptions_CoordinatorMode(t *testing.T) {
+	t.Parallel()
+
+	ctx := testClientRootContext(t, []string{
+		"--client-id", "c1",
+		"--client-secret", "s1",
+		"--server", "https://example.com",
+	})
+	built, err := buildClientOptions(ctx, "")
+	if err != nil {
+		t.Fatalf("buildClientOptions: %v", err)
+	}
+	if built.Type != "" {
+		t.Fatalf("coordinator mode should not set tunnel type, got %q", built.Type)
+	}
+	if built.UpstreamPort != 0 {
+		t.Fatalf("coordinator mode should not set upstream port, got %d", built.UpstreamPort)
+	}
+}
+
+func TestBuildClientOptions_HTTPSubcommand(t *testing.T) {
+	t.Parallel()
+
+	ctx := testClientHTTPContext(t, []string{"127.0.0.1:9000"})
+	built, err := buildClientOptions(ctx, "http")
+	if err != nil {
+		t.Fatalf("buildClientOptions: %v", err)
+	}
+	if built.Type != "http" || built.UpstreamPort != 9000 {
+		t.Fatalf("unexpected http options: type=%q port=%d", built.Type, built.UpstreamPort)
+	}
 }
 
 func TestResolveClientAuth(t *testing.T) {

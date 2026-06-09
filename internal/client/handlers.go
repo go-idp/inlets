@@ -71,6 +71,7 @@ func (c *Client) handleAuthenticateResponse(payload interface{}) error {
 		return fmt.Errorf("authentication failed: %s", resp.Message)
 	}
 
+	c.monitorAuthOK = true
 	c.authTimeout.Stop()
 	c.logger.Printf("[authenticate] connected")
 
@@ -103,8 +104,20 @@ func (c *Client) handleAuthenticateResponse(payload interface{}) error {
 		c.logger.Printf("[authenticate] Using legacy protocol")
 	}
 
-	if c.opts.Type == "http" {
-		c.logger.Printf("Forwarding: %s -> %s://%s:%d", resp.URL, c.opts.Type, c.opts.UpstreamHost, c.opts.UpstreamPort)
+	if c.hasLocalTunnel() {
+		if strings.EqualFold(c.opts.Type, "http") {
+			c.logger.Printf("Forwarding: %s -> %s://%s:%d", resp.URL, c.opts.Type, c.opts.UpstreamHost, c.opts.UpstreamPort)
+		}
+	} else {
+		n := 0
+		if resp.Config != nil {
+			n = len(resp.Config.Tunnels)
+		}
+		if n > 0 {
+			c.logger.Printf("[coordinator] connected; starting %d server-managed tunnel(s)", n)
+		} else {
+			c.logger.Printf("[coordinator] connected; waiting for server-managed tunnels")
+		}
 	}
 
 	c.spawnServerConfiguredTunnels(&resp)
@@ -112,8 +125,16 @@ func (c *Client) handleAuthenticateResponse(payload interface{}) error {
 	return nil
 }
 
+func (c *Client) hasLocalTunnel() bool {
+	t := strings.ToLower(strings.TrimSpace(c.opts.Type))
+	return t == "http" || t == "tcp"
+}
+
 func (c *Client) spawnServerConfiguredTunnels(resp *AuthenticateResponse) {
-	if c.opts.OpaqueChild || resp.Config == nil || len(resp.Config.Tunnels) == 0 {
+	if c.opts.OpaqueChild {
+		return
+	}
+	if resp.Config == nil || len(resp.Config.Tunnels) == 0 {
 		return
 	}
 	snap := AuthSnapshotFromOptions(c.opts)

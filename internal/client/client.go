@@ -66,6 +66,9 @@ type Client struct {
 	heartbeatMu     sync.Mutex
 	heartbeatActive bool // true if heartbeat is active
 
+	// monitorAuthOK is set after a successful authenticate response (ok=true).
+	monitorAuthOK bool
+
 	// separatedChannels is true when using /_/monitor (and data channel); false for legacy /_client
 	// or after HTTP 404 on /_/monitor forces legacy. Reconnect reuses this choice.
 	separatedChannels bool
@@ -418,7 +421,24 @@ func (c *Client) authenticate() error {
 	return nil
 }
 
-// handleMonitorMessages handles messages from monitor channel
+// tryReconnectMonitor returns false when authentication never completed; the process should exit.
+func (c *Client) tryReconnectMonitor() bool {
+	if !c.monitorAuthOK {
+		if c.hasLocalTunnel() {
+			c.logger.Printf("Monitor closed before tunnel authentication completed; check credentials and server logs")
+		} else {
+			c.logger.Printf("Monitor closed before coordinator authentication completed; the server must support sessions without http/tcp (upgrade inlets server)")
+		}
+		return false
+	}
+	if err := c.reconnect(); err != nil {
+		c.logger.Printf("Reconnection failed: %v", err)
+		return false
+	}
+	return true
+}
+
+// handleMonitorMessages handles messages from monitor channel.
 // For legacy protocol: handles all messages (ping/pong, auth, control, request, tcp:ready, tcp:connect, tcp:data)
 // For new protocol: handles ping/pong, auth, control, request, tcp:ready, tcp:connect (tcp:data goes to data channel)
 func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
@@ -441,12 +461,9 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 
 			// If connection was closed due to ping timeout, handleDisconnect was already called
 			if isClosing {
-				// Try to reconnect (reconnect will reset closing flag)
-				if err := c.reconnect(); err != nil {
-					c.logger.Printf("Reconnection failed: %v", err)
+				if !c.tryReconnectMonitor() {
 					os.Exit(1)
 				}
-				// New reconnect spawns its own reader; stop this goroutine
 				return
 			}
 
@@ -455,9 +472,7 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 				websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				c.logger.Printf("Monitor channel closed: %v", err)
 				c.handleDisconnect()
-				// Try to reconnect
-				if err := c.reconnect(); err != nil {
-					c.logger.Printf("Reconnection failed: %v", err)
+				if !c.tryReconnectMonitor() {
 					os.Exit(1)
 				}
 				return
@@ -470,10 +485,8 @@ func (c *Client) handleMonitorMessages(remoteHost string, useNewProtocol bool) {
 				strings.Contains(errStr, "EOF") {
 				c.logger.Printf("Monitor channel error: %v", err)
 				c.handleDisconnect()
-				// Try to reconnect
-				if err := c.reconnect(); err != nil {
-					c.logger.Printf("Reconnection failed: %v", err)
-					return
+				if !c.tryReconnectMonitor() {
+					os.Exit(1)
 				}
 				return
 			}
@@ -728,6 +741,8 @@ func (c *Client) reconnect() error {
 	c.closingMu.Lock()
 	c.closing = false
 	c.closingMu.Unlock()
+
+	c.monitorAuthOK = false
 
 	// Stop heartbeat before reconnecting to prevent multiple heartbeat goroutines
 	c.stopHeartbeat()

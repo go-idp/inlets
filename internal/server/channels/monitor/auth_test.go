@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-idp/inlets/internal/client"
+	"github.com/go-idp/inlets/internal/server/config"
 	servercontainer "github.com/go-idp/inlets/internal/server/container"
+	"github.com/go-idp/inlets/internal/server/stats"
 	"github.com/go-idp/inlets/internal/server/types"
+	"github.com/go-idp/inlets/internal/server/utils"
 	"github.com/gorilla/websocket"
 )
 
@@ -293,5 +297,106 @@ func TestSchedulePublicMonitorSessionTTLWarnAndClose(t *testing.T) {
 	}
 	if !closed {
 		t.Fatalf("expected websocket to be closed after ttl")
+	}
+}
+
+func TestHandleAuthenticate_CoordinatorSession(t *testing.T) {
+	configRef := config.NewRef(&config.FileConfig{
+		Token: "server-token",
+		Clients: []config.ClientConfig{{
+			ClientID:     "agent.idp.ys",
+			ClientSecret: "secret1",
+			Tunnels: []client.TunnelSpec{{
+				Name:     "web",
+				Type:     "http",
+				Upstream: "127.0.0.1:8080",
+			}},
+		}},
+	})
+	getToken := config.CreateGetToken(configRef, "2.0.0")
+
+	ctx := &types.Context{
+		Container:         servercontainer.NewTunnelContainer(),
+		DomainMappings:    servercontainer.NewDomainContainer(),
+		TrafficStats:      stats.NewTrafficStatsContainer(),
+		CallbackContainer: servercontainer.NewCallbackContainer(),
+	}
+
+	serverConnCh := make(chan *websocket.Conn, 1)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConnCh <- c
+	}))
+	defer s.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(s.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer clientConn.Close()
+
+	var serverConn *websocket.Conn
+	select {
+	case serverConn = <-serverConnCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server websocket")
+	}
+	defer serverConn.Close()
+
+	wsConn := &WebSocketConnection{Conn: serverConn}
+	ts := time.Now().UnixMilli()
+	authPayload := map[string]interface{}{
+		"version":      "2.0.0",
+		"type":         "",
+		"port":         0,
+		"timestamp":    ts,
+		"authType":     "credentials",
+		"clientId":     "agent.idp.ys",
+		"signature":    utils.HMACSHA512(strconv.FormatInt(ts, 10), "secret1"),
+		"capabilities": client.GetClientCapabilities("2.0.0"),
+	}
+
+	var subDomain string
+	var isAuth bool
+	err = handleAuthenticate(ctx, &CreateWebSocketOptions{
+		Version: "2.0.0",
+		Domain:  "example.com",
+		Token:   getToken,
+	}, NewEventEmitter(), wsConn, authPayload, &isAuth, &subDomain)
+	if err != nil {
+		t.Fatalf("handleAuthenticate coordinator: %v", err)
+	}
+
+	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, msg, err := clientConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read auth response: %v", err)
+	}
+	var arr []interface{}
+	if err := json.Unmarshal(msg, &arr); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(arr) < 2 || arr[0] != "authenticate" {
+		t.Fatalf("unexpected message: %#v", arr)
+	}
+	resp, ok := arr[1].(map[string]interface{})
+	if !ok || resp["ok"] != true {
+		t.Fatalf("expected ok authenticate response, got %#v", arr[1])
+	}
+	cfg, ok := resp["config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected config in response, got %#v", resp["config"])
+	}
+	tunnels, ok := cfg["tunnels"].([]interface{})
+	if !ok || len(tunnels) != 1 {
+		t.Fatalf("expected one tunnel in config, got %#v", cfg["tunnels"])
+	}
+	if got := ctx.Container.Get(wsConn.ContainerID); got != nil {
+		t.Fatalf("coordinator session should not create a tunnel container")
 	}
 }

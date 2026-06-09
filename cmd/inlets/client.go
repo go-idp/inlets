@@ -204,12 +204,12 @@ func resolveClientCtx(leaf *cli.Context) *cli.Context {
 	return leaf
 }
 
-func runTunnelClient(leaf *cli.Context, subcommandType string) error {
+func buildClientOptions(leaf *cli.Context, subcommandType string) (*client.Options, error) {
 	cc := resolveClientCtx(leaf)
 
-	tunnelType := "http"
-	upstreamHost := "127.0.0.1"
-	upstreamPort := 80
+	tunnelType := ""
+	upstreamHost := ""
+	upstreamPort := 0
 	port := 0
 	subDomain := ""
 	token := ""
@@ -232,7 +232,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if configPath != "" {
 		cfg, err := loadClientConfig(configPath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if strings.TrimSpace(cfg.Type) != "" {
 			tunnelType = strings.TrimSpace(cfg.Type)
@@ -240,7 +240,7 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 		if strings.TrimSpace(cfg.Upstream) != "" {
 			h, p, err := parseUpstreamArg(strings.TrimSpace(cfg.Upstream))
 			if err != nil {
-				return err
+				return nil, err
 			}
 			upstreamHost = h
 			upstreamPort = p
@@ -314,12 +314,12 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if serverConfigured {
 		normalizedServer, err := parseServerArg(server)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		server = normalizedServer
 	}
 	if err := validateTransportMode(legacy, serverConfigured, remoteConfigured, remoteTCPConfigured); err != nil {
-		return err
+		return nil, err
 	}
 	if !legacy {
 		if !serverConfigured {
@@ -330,21 +330,21 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if subcommandType == "" {
 		at, _, _, err := resolveClientAuth(clientIDIn, clientSecretIn, credentials, token)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if at == "public" {
-			return fmt.Errorf("when http/tcp subcommand is omitted, use --token, or --client-id with --client-secret, or --credentials for server-managed tunnels")
+			return nil, fmt.Errorf("when http/tcp subcommand is omitted, use --token, or --client-id with --client-secret, or --credentials for server-managed tunnels")
 		}
 	}
 
 	switch subcommandType {
 	case "http", "tcp":
 		if leaf.NArg() != 1 {
-			return fmt.Errorf("%s requires exactly one upstream argument (port or host:port)", subcommandType)
+			return nil, fmt.Errorf("%s requires exactly one upstream argument (port or host:port)", subcommandType)
 		}
 		h, p, err := parseUpstreamArg(leaf.Args().First())
 		if err != nil {
-			return err
+			return nil, err
 		}
 		upstreamHost, upstreamPort = h, p
 		tunnelType = subcommandType
@@ -362,8 +362,14 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	default:
 	}
 
-	if tunnelType != "http" && tunnelType != "tcp" {
-		return fmt.Errorf("type must be 'http' or 'tcp'")
+	if subcommandType != "" && tunnelType != "http" && tunnelType != "tcp" {
+		return nil, fmt.Errorf("type must be 'http' or 'tcp'")
+	}
+	if tunnelType != "" && tunnelType != "http" && tunnelType != "tcp" {
+		return nil, fmt.Errorf("type must be 'http' or 'tcp'")
+	}
+	if tunnelType != "" && upstreamPort <= 0 {
+		return nil, fmt.Errorf("upstream is required when tunnel type is %q", tunnelType)
 	}
 
 	// Parent-only + YAML http: SUB_DOMAIN is not parsed as an http subcommand flag; honor env here.
@@ -384,10 +390,10 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 
 	authType, clientId, clientSecret, err := resolveClientAuth(clientIDIn, clientSecretIn, credentials, token)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if authType == "public" && tunnelType != "http" {
-		return fmt.Errorf("public auth only allowed for http")
+		return nil, fmt.Errorf("public auth requires http tunnel (use: inlets client http <upstream>)")
 	}
 
 	protocolVersion := "2.0.0"
@@ -415,6 +421,15 @@ func runTunnelClient(leaf *cli.Context, subcommandType string) error {
 	if tunnelType == "http" {
 		opts.UpstreamUsername = upstreamUser
 		opts.UpstreamPassword = upstreamPass
+	}
+
+	return opts, nil
+}
+
+func runTunnelClient(leaf *cli.Context, subcommandType string) error {
+	opts, err := buildClientOptions(leaf, subcommandType)
+	if err != nil {
+		return err
 	}
 
 	cl := client.New(opts)
@@ -491,8 +506,11 @@ Examples:
   # TCP tunnel with credentials
   inlets client --credentials clientId:clientSecret tcp -p 20100 127.0.0.1:22
 
-  # Server-managed tunnels only (no http/tcp subcommand)
+  # Coordinator: connect with credentials only; server YAML tunnels start as child sessions
   inlets client --credentials clientId:clientSecret
+
+  # Coordinator with explicit server URL
+  inlets client -s https://tunnel.example.com --client-id id --client-secret secret
 
   # From config file
   inlets client -c ./conf/example/client.yaml
