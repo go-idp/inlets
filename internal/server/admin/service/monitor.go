@@ -35,6 +35,29 @@ func (m *Monitor) Overview() map[string]any {
 	}
 }
 
+// AdminStatus returns resolved admin console settings for read-only display.
+func (m *Monitor) AdminStatus() map[string]any {
+	return adminStatusView(m.deps.Admin)
+}
+
+func adminStatusView(r *config.ResolvedAdmin) map[string]any {
+	if r == nil || !r.Enabled {
+		return map[string]any{"enabled": false}
+	}
+	listen := fmt.Sprintf("%s:%d", r.Host, r.Port)
+	if r.Host == "" || r.Host == "0.0.0.0" {
+		listen = fmt.Sprintf(":%d", r.Port)
+	}
+	return map[string]any{
+		"enabled":          true,
+		"listen":           listen,
+		"uiBasePath":       r.UIBasePath,
+		"databasePath":     r.DatabasePath,
+		"snapshotInterval": r.SnapshotInterval.String(),
+		"pidFile":          r.PidFile,
+	}
+}
+
 type SessionView struct {
 	ContainerID    string   `json:"containerId"`
 	ClientID       string   `json:"clientId"`
@@ -118,8 +141,7 @@ func (m *Monitor) matchSessionIndex(tm *types.TunnelMapping) (int, []string, boo
 	return idx, issues, true
 }
 
-// currentConfig returns the YAML-backed FileConfig (overrides NOT applied,
-// since overrides don't change client identities).
+// currentConfig returns the YAML-backed FileConfig.
 func (m *Monitor) currentConfig() *config.FileConfig {
 	if m.deps.ReloadManager == nil {
 		return nil

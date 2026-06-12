@@ -61,4 +61,62 @@ clients:
     const out = YAML.parse(serializeValuesToYAML(parsed, src))
     expect(out.futureField).toBe('keep-me')
   })
+
+  it('does not inject template-only keys removed from target', () => {
+    const src = `
+domain: example.com
+clients:
+  - clientId: a
+    clientSecret: b
+    port: 30000
+`
+    const parsed = YAML.parse(src)
+    parsed.clients[0] = { clientId: 'a', clientSecret: 'b', tunnels: [{ type: 'tcp', upstream: '127.0.0.1:1', remotePort: 1 }] }
+    const out = YAML.parse(serializeValuesToYAML(parsed, src))
+    expect(out.clients[0].port).toBeUndefined()
+  })
+
+  it('does not copy client fields from template[0] onto other clients', () => {
+    const src = `
+domain: example.com
+clients:
+  - clientId: first
+    clientSecret: s1
+    port: 30000
+  - clientId: second
+    clientSecret: s2
+    type: tcp
+`
+    const parsed = YAML.parse(src)
+    parsed.clients[1] = {
+      clientId: 'second',
+      clientSecret: 's2',
+      tunnels: [{ type: 'tcp', upstream: '127.0.0.1:8080', remotePort: 2222 }],
+    }
+    const out = YAML.parse(serializeValuesToYAML(parsed, src))
+    expect(out.clients[1].port).toBeUndefined()
+    expect(out.clients[1].type).toBeUndefined()
+    expect(out.clients[1].tunnels[0].remotePort).toBe(2222)
+  })
+
+  it('drops empty tunnel name and type-specific empty fields', () => {
+    const src = `
+domain: example.com
+clients:
+  - clientId: a
+    clientSecret: b
+`
+    const parsed = YAML.parse(src)
+    parsed.clients[0].tunnels = [{
+      name: '',
+      type: 'tcp',
+      upstream: '127.0.0.1:8080',
+      subDomain: '',
+      remotePort: 2222,
+    }]
+    const out = YAML.parse(serializeValuesToYAML(parsed, src))
+    expect(out.clients[0].tunnels[0].name).toBeUndefined()
+    expect(out.clients[0].tunnels[0].subDomain).toBeUndefined()
+    expect(out.clients[0].tunnels[0].remotePort).toBe(2222)
+  })
 })

@@ -3,9 +3,44 @@
 // the real values in a ref so that re-serializing the form doesn't wipe them.
 
 import type { ConfigSchema, FieldDef } from '../../api/client'
-import { getByPath } from '../../schema/renderers'
+import { getByPath, setByPath } from '../../schema/renderers'
 
 export const SECRET_PLACEHOLDER = '***'
+
+/** Mask secret fields in form state; real values live in secretsRef. */
+export function maskSecretsInValues(values: any, schema: ConfigSchema | null): any {
+  if (!schema || !values) return values ?? {}
+  let next = values
+  for (const g of schema.groups) {
+    for (const f of g.fields) {
+      if (f.kind !== 'secret') continue
+      const v = getByPath(next, f.path)
+      if (typeof v === 'string' && v !== '' && v !== SECRET_PLACEHOLDER) {
+        next = setByPath(next, f.path, SECRET_PLACEHOLDER)
+      }
+    }
+  }
+  if (Array.isArray(next?.clients)) {
+    next = {
+      ...next,
+      clients: next.clients.map((c: any) => {
+        if (!c || typeof c.clientSecret !== 'string') return c
+        if (c.clientSecret === '' || c.clientSecret === SECRET_PLACEHOLDER) return c
+        return { ...c, clientSecret: SECRET_PLACEHOLDER }
+      }),
+    }
+  }
+  return next
+}
+
+export function secretDisplayValue(v: unknown): string {
+  if (v === SECRET_PLACEHOLDER || v == null) return ''
+  return String(v)
+}
+
+export function hasStoredSecret(v: unknown): boolean {
+  return v === SECRET_PLACEHOLDER
+}
 
 export function maskSecretValue(field: FieldDef, v: unknown): unknown {
   if (field.kind === 'secret' && v && v !== SECRET_PLACEHOLDER) {

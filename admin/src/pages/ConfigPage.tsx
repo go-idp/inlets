@@ -5,15 +5,13 @@ import { ConfigSaveDialog } from './config/ConfigSaveDialog'
 import { ConfigStatusPill } from './config/ConfigStatusPill'
 import { ConfigTabs } from './config/ConfigTabs'
 import { ConfigYamlEditor } from './config/ConfigYamlEditor'
-import { OverrideBanner } from './config/OverrideBanner'
-import { OverridePanel } from './config/OverridePanel'
 import { useConfigState } from './config/useConfigState'
 
 export function ConfigPage() {
   const { state, actions } = useConfigState()
   const {
     tab, yaml, path, schema, values, errors, topError, topOk, saving,
-    showSaveDialog, pendingDiff, summary, overrideCount, errorByPath, status,
+    showSaveDialog, pendingDiff, summary, errorByPath, status,
   } = state
 
   return (
@@ -43,9 +41,7 @@ export function ConfigPage() {
 
       <ConfigStatusPill status={status} errorCount={errors.length} />
 
-      <ConfigTabs tab={tab} onChange={actions.setTab} overrideCount={overrideCount} />
-
-      <OverrideBanner count={overrideCount} />
+      <ConfigTabs tab={tab} onChange={actions.setTab} />
 
       {tab === 'visual' && schema ? (
         <ConfigForm
@@ -58,10 +54,6 @@ export function ConfigPage() {
 
       {tab === 'yaml' ? (
         <ConfigYamlEditor value={yaml} onChange={actions.onYAMLChange} />
-      ) : null}
-
-      {tab === 'override' ? (
-        <OverridePanel onCountChange={actions.setOverrideCount} />
       ) : null}
 
       {tab === 'revisions' ? (

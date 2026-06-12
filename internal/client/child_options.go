@@ -18,9 +18,7 @@ func ChildOptionsFromSpec(base *Options, spec *TunnelSpec) (*Options, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(spec.Name) == "" {
-		return nil, fmt.Errorf("tunnel name is required")
-	}
+	label := tunnelSpecLabel(spec)
 	o := &Options{
 		Type:                t,
 		UpstreamHost:        host,
@@ -52,9 +50,9 @@ func ChildOptionsFromSpec(base *Options, spec *TunnelSpec) (*Options, error) {
 	case spec.RemotePort >= 1 && spec.RemotePort <= 65535:
 		o.TunnelPort = spec.RemotePort
 	case spec.RemotePort == 0:
-		return nil, fmt.Errorf("tcp tunnel %q: set remotePort in server config for automatically started extra tunnels (or run a separate client with tcp -p)", spec.Name)
+		return nil, fmt.Errorf("tcp tunnel %q: set remotePort in server config for automatically started extra tunnels (or run a separate client with tcp -p)", label)
 	default:
-		return nil, fmt.Errorf("invalid remotePort for tcp tunnel %q", spec.Name)
+		return nil, fmt.Errorf("invalid remotePort for tcp tunnel %q", label)
 	}
 	return o, nil
 }

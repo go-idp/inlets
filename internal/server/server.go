@@ -392,16 +392,10 @@ func (s *Server) ReconcileAdmin(cfg *config.FileConfig) error {
 		s.adminServer = nil
 	}
 
-	var override *config.Override
-	if s.options.ReloadManager != nil {
-		override = s.options.ReloadManager.Override()
-	}
-
 	adminSrv, err := admin.New(admin.Options{
 		Resolved:      resolved,
 		ConfigPath:    s.options.ConfigPath,
 		ReloadManager: s.options.ReloadManager,
-		Override:      override,
 		ServerVersion: s.options.Version,
 		Domain:        s.options.Domain,
 		HTTPPort:      s.options.Port,

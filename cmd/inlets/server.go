@@ -237,10 +237,7 @@ func serverRunAction(c *cli.Context) error {
 
 	var reloadMgr *config.Manager
 	reloadMgr = config.NewManager(configPath, configRef, func(cfg *config.FileConfig) error {
-		// The Manager updates ref.Set(cfg) BEFORE invoking apply, so
-		// reading EffectiveConfig() now gives us ref + override.
-		effective := reloadMgr.EffectiveConfig()
-		opts := config.BuildApplyOptions(effective, ServerVersion, config.CreateGetToken(configRef, ServerVersion))
+		opts := config.BuildApplyOptions(cfg, ServerVersion, config.CreateGetToken(configRef, ServerVersion))
 		if err := srv.UpdateConfig(
 			opts.GetToken,
 			opts.Notification,
@@ -250,12 +247,11 @@ func serverRunAction(c *cli.Context) error {
 		); err != nil {
 			return err
 		}
-		return srv.ReconcileAdmin(effective)
+		return srv.ReconcileAdmin(cfg)
 	})
 	srv.SetReloadManager(reloadMgr)
 	if srv.AdminServer() != nil {
 		srv.AdminServer().SetReloadManager(reloadMgr)
-		srv.AdminServer().SetOverride(reloadMgr.Override())
 	}
 
 	var watcher *fsnotify.Watcher

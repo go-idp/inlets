@@ -25,6 +25,22 @@ function tunnelLabel(t: TunnelRecord): string {
   return t.name ? `${t.name} (${type} → ${upstream})` : `${type} → ${upstream}`
 }
 
+function normalizeTunnels(tunnels: TunnelRecord[]): TunnelRecord[] {
+  return tunnels.map((t) => {
+    const type = (t.type ?? '').toLowerCase()
+    const next: TunnelRecord = { ...t, type }
+    if (type === 'http') {
+      delete next.remotePort
+    } else if (type === 'tcp') {
+      delete next.subDomain
+    }
+    if (!next.name?.trim()) {
+      delete next.name
+    }
+    return next
+  })
+}
+
 export function ClientTunnelsDrawer({
   clientIndex, clientId, tunnels, onClose, onSave, errorByPath,
 }: Props) {
@@ -47,11 +63,12 @@ export function ClientTunnelsDrawer({
 
   const saveTunnelDrawer = () => {
     if (!tunnelDrawer) return
+    const draft = normalizeTunnels([tunnelDrawer.draft])[0]
     const next = [...localTunnels]
     if (tunnelDrawer.mode === 'create') {
-      next.push(tunnelDrawer.draft)
+      next.push(draft)
     } else {
-      next[tunnelDrawer.index] = tunnelDrawer.draft
+      next[tunnelDrawer.index] = draft
     }
     setLocalTunnels(next)
     setTunnelDrawer(null)
@@ -68,7 +85,8 @@ export function ClientTunnelsDrawer({
   }
 
   const handleSaveAll = () => {
-    onSave(localTunnels)
+    onSave(normalizeTunnels(localTunnels))
+    onClose()
   }
 
   const tunnelValid = Boolean(

@@ -19,7 +19,7 @@ export function ConfigForm({ schema, values, onFieldChange, errorByPath }: Props
   // Top-level groups: object groups plus the "clients" pseudo-group.
   const topGroups: GroupDef[] = useMemo(
     () => schema.groups.filter(
-      (g) => g.kind === 'object' && g.key !== 'clients.item' && g.key !== 'tunnels.item',
+      (g) => g.kind === 'object' && g.key !== 'clients.item' && g.key !== 'tunnels.item' && g.key !== 'admin',
     ),
     [schema],
   )

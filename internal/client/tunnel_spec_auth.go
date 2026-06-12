@@ -12,6 +12,22 @@ func tunnelPortFromOptions(o *Options) int {
 	return o.TunnelPort
 }
 
+func tunnelSpecLabel(spec *TunnelSpec) string {
+	if spec == nil {
+		return "?"
+	}
+	if n := strings.TrimSpace(spec.Name); n != "" {
+		return n
+	}
+	if u := strings.TrimSpace(spec.Upstream); u != "" {
+		return u
+	}
+	if t := strings.TrimSpace(spec.Type); t != "" {
+		return t
+	}
+	return "?"
+}
+
 // AuthSnapshotFromOptions builds a minimal Authentication for matching this process against server tunnel rows.
 func AuthSnapshotFromOptions(o *Options) *Authentication {
 	if o == nil {
@@ -53,10 +69,10 @@ func ApplyTunnelSpecToAuthentication(auth *Authentication, spec *TunnelSpec) err
 			auth.TunnelPort = spec.RemotePort
 		case spec.RemotePort == 0:
 			if auth.TunnelPort < 1 || auth.TunnelPort > 65535 {
-				return fmt.Errorf("tcp tunnel %q: set remotePort in server config or pass tunnel port (tcp -p)", spec.Name)
+				return fmt.Errorf("tcp tunnel %q: set remotePort in server config or pass tunnel port (tcp -p)", tunnelSpecLabel(spec))
 			}
 		default:
-			return fmt.Errorf("invalid remotePort for tcp tunnel %q", spec.Name)
+			return fmt.Errorf("invalid remotePort for tcp tunnel %q", tunnelSpecLabel(spec))
 		}
 	}
 	return nil
@@ -135,10 +151,10 @@ func SyncOptsFromTunnelSpec(o *Options, spec *TunnelSpec) error {
 			o.TunnelPort = spec.RemotePort
 		case spec.RemotePort == 0:
 			if o.TunnelPort < 1 || o.TunnelPort > 65535 {
-				return fmt.Errorf("tcp tunnel %q: set remotePort in server config or pass tcp -p on the client", spec.Name)
+				return fmt.Errorf("tcp tunnel %q: set remotePort in server config or pass tcp -p on the client", tunnelSpecLabel(spec))
 			}
 		default:
-			return fmt.Errorf("invalid remotePort for tcp tunnel %q", spec.Name)
+			return fmt.Errorf("invalid remotePort for tcp tunnel %q", tunnelSpecLabel(spec))
 		}
 	}
 	return nil

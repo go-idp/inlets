@@ -18,5 +18,5 @@ type RuntimeDeps struct {
 	Started       time.Time
 	ConfigPath    string
 	ReloadManager *config.Manager
-	Override      *config.Override
+	Admin         *config.ResolvedAdmin
 }

@@ -49,10 +49,6 @@ func (a *API) Mount(g *zoox.RouterGroup) {
 	g.Get("/config/revisions", a.ListRevisions)
 	g.Get("/config/revisions/:id", a.GetRevision)
 	g.Post("/config/revisions/:id/restore", a.RestoreRevision)
-	g.Get("/overrides", a.ListOverrides)
-	g.Put("/overrides", a.SetOverride)
-	g.Delete("/overrides/clear-all", a.ClearAllOverrides)
-	g.Delete("/overrides/*path", a.DeleteOverride)
 	g.Get("/audit", a.AuditList)
 }
 
@@ -65,6 +61,7 @@ func (a *API) Status(ctx *zoox.Context) {
 		"httpPort":     a.deps.HTTPPort,
 		"tcpPort":      a.deps.TCPPort,
 		"sessionCount": len(a.monitor.Sessions()),
+		"admin":        a.monitor.AdminStatus(),
 	})
 }
 
@@ -256,76 +253,6 @@ func (a *API) RestoreRevision(ctx *zoox.Context) {
 		actor, clientIP,
 		fmt.Sprintf(`{"fromId":%d,"toId":%d}`, fromID, res.RevisionID))
 	ok(ctx, zoox.H{"reloaded": true, "revisionId": res.RevisionID})
-}
-
-func (a *API) ListOverrides(ctx *zoox.Context) {
-	if a.deps.Override == nil {
-		fail(ctx, http.StatusServiceUnavailable, "override layer not configured")
-		return
-	}
-	entries := a.deps.Override.List()
-	ok(ctx, zoox.H{
-		"entries": entries,
-		"size":    a.deps.Override.Size(),
-	})
-}
-
-type setOverrideBody struct {
-	Path  string `json:"path"`
-	Value any    `json:"value"`
-}
-
-func (a *API) SetOverride(ctx *zoox.Context) {
-	if a.deps.Override == nil {
-		fail(ctx, http.StatusServiceUnavailable, "override layer not configured")
-		return
-	}
-	var body setOverrideBody
-	if err := ctx.BindJSON(&body); err != nil {
-		fail(ctx, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if body.Path == "" {
-		fail(ctx, http.StatusBadRequest, "path is required")
-		return
-	}
-	if err := a.deps.Override.Set(body.Path, body.Value); err != nil {
-		fail(ctx, http.StatusBadRequest, err.Error())
-		return
-	}
-	_, _ = a.audit.Record("config.override.set",
-		fmt.Sprintf("override set: %s", body.Path),
-		actorFromRequest(ctx.Request), ctx.ClientIP(), "")
-	ok(ctx, zoox.H{"ok": true, "size": a.deps.Override.Size()})
-}
-
-func (a *API) DeleteOverride(ctx *zoox.Context) {
-	if a.deps.Override == nil {
-		fail(ctx, http.StatusServiceUnavailable, "override layer not configured")
-		return
-	}
-	path := ctx.Param().Get("path").String()
-	if path == "" {
-		fail(ctx, http.StatusBadRequest, "path is required")
-		return
-	}
-	a.deps.Override.Delete(path)
-	_, _ = a.audit.Record("config.override.clear",
-		fmt.Sprintf("override cleared: %s", path),
-		actorFromRequest(ctx.Request), ctx.ClientIP(), "")
-	ok(ctx, zoox.H{"ok": true, "size": a.deps.Override.Size()})
-}
-
-func (a *API) ClearAllOverrides(ctx *zoox.Context) {
-	if a.deps.Override == nil {
-		fail(ctx, http.StatusServiceUnavailable, "override layer not configured")
-		return
-	}
-	a.deps.Override.ClearAll()
-	_, _ = a.audit.Record("config.override.clear",
-		"all overrides cleared",
-		actorFromRequest(ctx.Request), ctx.ClientIP(), "")
-	ok(ctx, zoox.H{"ok": true, "size": 0})
 }
 
 func (a *API) Reload(ctx *zoox.Context) {

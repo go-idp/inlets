@@ -68,6 +68,7 @@ func NewConfigSchema() *ConfigSchema {
 					{Path: "tcpPort", Label: "TCP 端口", Kind: KindPort, Default: 0,
 						Min: &zero, Max: &maxPort, HelpText: "0 = 自动分配"},
 					{Path: "token", Label: "共享 Token", Kind: KindSecret,
+						Placeholder: "留空保存可清除",
 						HelpText: "老协议的 token 鉴权；凭证鉴权可留空"},
 					{Path: "secure", Label: "HTTPS", Kind: KindBool, Default: trueVal,
 						HelpText: "为客户端生成 https:// 公网入口"},
@@ -91,7 +92,7 @@ func NewConfigSchema() *ConfigSchema {
 			{
 				Key: "tunnels.item", Label: "Tunnel 条目", Path: "clients[*].tunnels[*]", Kind: "object",
 				Fields: []*FieldDef{
-					{Path: "name", Label: "名称", Kind: KindString},
+					{Path: "name", Label: "名称", Kind: KindString, HelpText: "可选，便于识别"},
 					{Path: "type", Label: "类型", Kind: KindEnum, Required: true, EnumValues: []string{"http", "tcp"}},
 					{Path: "upstream", Label: "上游", Kind: KindString, Required: true,
 						Placeholder: "127.0.0.1:8080"},
@@ -123,13 +124,6 @@ func NewConfigSchema() *ConfigSchema {
 						HelpText: "例如 10m / 1h；空 = 使用默认值"},
 					{Path: "publicHTTPNoAuth.warnLead", Label: "到期前提醒", Kind: KindDuration,
 						HelpText: "例如 2m"},
-				},
-			},
-			{
-				Key: "admin", Label: "Admin 控制台", Path: "admin", Kind: "object",
-				Fields: []*FieldDef{
-					{Path: "admin.enabled", Label: "启用", Kind: KindBool},
-					{Path: "admin.listen", Label: "监听地址", Kind: KindString, Placeholder: "0.0.0.0:9090"},
 				},
 			},
 		},

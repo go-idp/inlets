@@ -23,19 +23,7 @@ func SaveAtomic(path string, cfg *FileConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir config dir: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write temp config: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename config: %w", err)
-	}
-	return nil
+	return writeFileAtomic(path, data, 0o600)
 }
 
 // SaveRawAtomic writes raw YAML to path.
@@ -50,17 +38,27 @@ func SaveRawAtomic(path string, raw []byte) error {
 	if err := Validate(cfg); err != nil {
 		return err
 	}
+	return writeFileAtomic(path, raw, 0o600)
+}
+
+// writeFileAtomic writes data to path via a temp file and rename.
+// When rename fails (e.g. bind-mounted config on Linux returns EBUSY),
+// it falls back to truncating the destination in place.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	if err := os.WriteFile(tmp, data, perm); err != nil {
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		if err2 := os.WriteFile(path, data, perm); err2 != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("rename config: %w", err)
+		}
 		_ = os.Remove(tmp)
-		return fmt.Errorf("rename config: %w", err)
 	}
 	return nil
 }

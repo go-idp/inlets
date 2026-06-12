@@ -48,9 +48,10 @@ interface BaseFieldProps {
   value: unknown
   onChange: (v: unknown) => void
   error?: ValidationError
+  secretStored?: boolean
 }
 
-export function FieldRenderer({ field, value, onChange, error }: BaseFieldProps) {
+export function FieldRenderer({ field, value, onChange, error, secretStored }: BaseFieldProps) {
   const id = `f-${field.path}`
   return (
     <div className={`config-field${error ? ' error' : ''}`}>
@@ -58,14 +59,14 @@ export function FieldRenderer({ field, value, onChange, error }: BaseFieldProps)
         {field.label}
         {field.required ? <span className="req">*</span> : null}
       </label>
-      <FieldInput field={field} value={value} onChange={onChange} id={id} />
+      <FieldInput field={field} value={value} onChange={onChange} id={id} secretStored={secretStored} />
       {error ? <span className="err-msg">{error.message}</span> : null}
       {!error && field.helpText ? <span className="help">{field.helpText}</span> : null}
     </div>
   )
 }
 
-function FieldInput({ field, value, onChange, id }: BaseFieldProps & { id: string }) {
+function FieldInput({ field, value, onChange, id, secretStored }: BaseFieldProps & { id: string }) {
   switch (field.kind) {
     case 'bool':
       return (
@@ -114,7 +115,15 @@ function FieldInput({ field, value, onChange, id }: BaseFieldProps & { id: strin
       )
 
     case 'secret':
-      return <SecretInput id={id} value={value} onChange={onChange} placeholder={field.placeholder} />
+      return (
+        <SecretInput
+          id={id}
+          value={value}
+          onChange={onChange}
+          placeholder={field.placeholder}
+          stored={secretStored}
+        />
+      )
 
     case 'duration':
       return (
@@ -141,7 +150,15 @@ function FieldInput({ field, value, onChange, id }: BaseFieldProps & { id: strin
   }
 }
 
-function SecretInput({ id, value, onChange, placeholder }: { id: string; value: unknown; onChange: (v: unknown) => void; placeholder?: string }) {
+function SecretInput({
+  id, value, onChange, placeholder, stored,
+}: {
+  id: string
+  value: unknown
+  onChange: (v: unknown) => void
+  placeholder?: string
+  stored?: boolean
+}) {
   const [shown, setShown] = useState(false)
   return (
     <div className="config-secret">
@@ -149,10 +166,15 @@ function SecretInput({ id, value, onChange, placeholder }: { id: string; value: 
         id={id}
         type={shown ? 'text' : 'password'}
         value={value == null ? '' : String(value)}
-        placeholder={placeholder}
+        placeholder={placeholder ?? (stored ? '已设置' : undefined)}
         autoComplete="off"
         onChange={(e) => onChange(e.target.value)}
       />
+      {stored ? (
+        <button type="button" onClick={() => onChange('')}>
+          清除
+        </button>
+      ) : null}
       <button type="button" onClick={() => setShown((s) => !s)}>
         {shown ? '隐藏' : '显示'}
       </button>

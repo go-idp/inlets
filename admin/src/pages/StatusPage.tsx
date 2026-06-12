@@ -3,11 +3,16 @@ import { api, type OverviewData, type StatusData } from '../api/client'
 import { PageHeader } from '../components/PageHeader'
 import { formatTime, formatUptime } from '../lib/format'
 
+function boolLabel(v: boolean | undefined): string {
+  if (v === true) return '是'
+  if (v === false) return '否'
+  return '—'
+}
+
 export function StatusPage() {
   const [status, setStatus] = useState<StatusData | null>(null)
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [error, setError] = useState('')
-  const [overrideSize, setOverrideSize] = useState<number | null>(null)
 
   useEffect(() => {
     Promise.all([api.status(), api.overview()])
@@ -16,18 +21,14 @@ export function StatusPage() {
         setOverview(o)
       })
       .catch((e: Error) => setError(e.message))
-    api.listOverrides().then((o) => setOverrideSize(o.size)).catch(() => { /* not configured */ })
   }, [])
+
+  const admin = status?.admin
 
   return (
     <>
       <PageHeader title="服务信息" subtitle="inlets server 运行时状态" />
       {error ? <div className="alert alert-danger">{error}</div> : null}
-      {overrideSize && overrideSize > 0 ? (
-        <div className="alert" style={{ background: 'rgba(232, 184, 74, 0.10)', border: '1px solid rgba(232, 184, 74, 0.35)', color: 'var(--warn)' }}>
-          ⚠ {overrideSize} 项临时覆盖生效中，进程重启后失效。
-        </div>
-      ) : null}
       <div className="panel">
         <table className="data kv-table">
           <tbody>
@@ -68,6 +69,43 @@ export function StatusPage() {
             <tr>
               <th>热重载</th>
               <td>{status?.reloadReady ? 'ready' : 'not configured'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <h2>Admin 控制台</h2>
+        </div>
+        <p style={{ margin: 0, padding: '12px 16px', fontSize: 12, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+          只读展示；修改请编辑 server.yaml 中的 <code className="inline">admin</code> 段
+        </p>
+        <table className="data kv-table">
+          <tbody>
+            <tr>
+              <th>启用</th>
+              <td>{boolLabel(admin?.enabled)}</td>
+            </tr>
+            <tr>
+              <th>监听地址</th>
+              <td><code className="inline">{admin?.listen || '—'}</code></td>
+            </tr>
+            <tr>
+              <th>UI 路径</th>
+              <td><code className="inline">{admin?.uiBasePath || '—'}</code></td>
+            </tr>
+            <tr>
+              <th>数据库</th>
+              <td><code className="inline">{admin?.databasePath || '—'}</code></td>
+            </tr>
+            <tr>
+              <th>指标快照间隔</th>
+              <td>{admin?.snapshotInterval || '—'}</td>
+            </tr>
+            <tr>
+              <th>PID 文件</th>
+              <td><code className="inline">{admin?.pidFile || '—'}</code></td>
             </tr>
           </tbody>
         </table>

@@ -1,6 +1,6 @@
 import type { GroupDef, FieldDef, ValidationError } from '../../api/client'
 import { FieldRenderer, getByPath } from '../../schema/renderers'
-import { maskSecretValue } from './secrets'
+import { hasStoredSecret, secretDisplayValue } from './secrets'
 
 type Props = {
   group: GroupDef
@@ -14,12 +14,14 @@ export function ConfigSectionCard({ group, values, onFieldChange, errorByPath }:
     <div className="config-section">
       <h3>{group.label}</h3>
       {group.fields.map((f) => {
-        const v = getByPath(values, f.path)
+        const raw = getByPath(values, f.path)
+        const isSecret = f.kind === 'secret'
         return (
           <FieldRenderer
             key={f.path}
             field={f}
-            value={maskSecretValue(f, v)}
+            value={isSecret ? secretDisplayValue(raw) : raw}
+            secretStored={isSecret && hasStoredSecret(raw)}
             onChange={(nv) => onFieldChange(f, nv)}
             error={errorByPath[f.path]}
           />

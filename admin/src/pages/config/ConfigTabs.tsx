@@ -1,19 +1,17 @@
-export type ConfigTabKey = 'visual' | 'yaml' | 'override' | 'revisions'
+export type ConfigTabKey = 'visual' | 'yaml' | 'revisions'
 
 type Props = {
   tab: ConfigTabKey
   onChange: (tab: ConfigTabKey) => void
-  overrideCount: number
 }
 
 const TABS: { key: ConfigTabKey; label: string }[] = [
   { key: 'visual', label: '可视化' },
   { key: 'yaml', label: 'YAML 源' },
-  { key: 'override', label: '临时覆盖' },
   { key: 'revisions', label: '历史版本' },
 ]
 
-export function ConfigTabs({ tab, onChange, overrideCount }: Props) {
+export function ConfigTabs({ tab, onChange }: Props) {
   return (
     <div className="config-tabs" role="tablist">
       {TABS.map((t) => {
@@ -28,9 +26,6 @@ export function ConfigTabs({ tab, onChange, overrideCount }: Props) {
             onClick={() => onChange(t.key)}
           >
             {t.label}
-            {t.key === 'override' && overrideCount > 0 ? (
-              <span className="config-tab-badge">{overrideCount}</span>
-            ) : null}
           </button>
         )
       })}

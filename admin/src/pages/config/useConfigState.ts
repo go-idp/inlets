@@ -4,9 +4,9 @@ import { computeDiff } from '../../components/DiffViewer'
 import { getByPath, setByPath } from '../../schema/renderers'
 import { serializeValuesToYAML } from '../../schema/serialize'
 import { valuesFromYAML } from './parseValues'
-import { collectSecrets, SECRET_PLACEHOLDER } from './secrets'
+import { collectSecrets, maskSecretsInValues, SECRET_PLACEHOLDER } from './secrets'
 
-type Tab = 'visual' | 'yaml' | 'override' | 'revisions'
+type Tab = 'visual' | 'yaml' | 'revisions'
 
 export type Status = 'ok' | 'warn' | 'err'
 
@@ -25,7 +25,6 @@ export function useConfigState() {
   const [pendingYAML, setPendingYAML] = useState('')
   const [pendingDiff, setPendingDiff] = useState('')
   const [summary, setSummary] = useState('')
-  const [overrideCount, setOverrideCount] = useState(0)
   const secretsRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
@@ -44,15 +43,11 @@ export function useConfigState() {
         // Structured GET /config uses Go JSON field names (Domain, TCPPort, …) which
         // do not match schema paths (domain, tcpPort, …). Parse raw YAML instead.
         const cfg = valuesFromYAML(raw.yaml)
-        setValues(cfg)
         secretsRef.current = collectSecrets(cfg, sch)
+        setValues(maskSecretsInValues(cfg, sch))
         const result = await api.validateConfig(raw.yaml)
         if (cancelled) return
         setErrors(result.errors ?? [])
-        try {
-          const o = await api.listOverrides()
-          if (!cancelled) setOverrideCount(o.size)
-        } catch { /* override layer might not be configured */ }
       } catch (e) {
         if (cancelled) return
         setTopError(e instanceof Error ? e.message : 'failed to load config')
@@ -130,8 +125,8 @@ export function useConfigState() {
     if (next === 'visual' && tab === 'yaml' && yaml.trim()) {
       try {
         const parsed = valuesFromYAML(yaml)
-        setValues(parsed)
         secretsRef.current = collectSecrets(parsed, schema)
+        setValues(maskSecretsInValues(parsed, schema))
       } catch {
         /* keep existing values when YAML tab has parse errors */
       }
@@ -144,8 +139,8 @@ export function useConfigState() {
     setRawYaml(raw.yaml)
     setYaml(raw.yaml)
     const cfg = valuesFromYAML(raw.yaml)
-    setValues(cfg)
     secretsRef.current = collectSecrets(cfg, schema)
+    setValues(maskSecretsInValues(cfg, schema))
     const result = await api.validateConfig(raw.yaml)
     setErrors(result.errors ?? [])
   }, [schema])
@@ -195,12 +190,11 @@ export function useConfigState() {
   return {
     state: {
       tab, yaml, rawYaml, path, schema, values, errors, topError, topOk, saving,
-      showSaveDialog, pendingYAML, pendingDiff, summary, overrideCount, errorByPath, status,
+      showSaveDialog, pendingYAML, pendingDiff, summary, errorByPath, status,
     },
     actions: {
       setTab: setTabWithSync, setSummary, setShowSaveDialog,
       onFieldChange, onYAMLChange, onSave, onConfirmSave, onValidate, onRestored,
-      setOverrideCount,
     },
   }
 }

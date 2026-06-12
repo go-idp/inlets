@@ -238,8 +238,6 @@ admin:
 			diff: "+bandwidthLimits:\n+  global:\n+    upload: 1048576\n+notification:\n+  provider: feishu\n"},
 		{offset: 5 * time.Hour, action: "config.save", summary: "Add CI runner and partner webhook clients", actor: "devops@acme-corp.io", ip: "10.0.3.21",
 			diff: "+  - clientId: ci-runner-01\n+  - clientId: partner-webhook\n+publicHTTPNoAuth:\n+  timeout: 15m\n"},
-		{offset: 2 * time.Hour, action: "config.override.set", summary: "Temporary: raise prod upload cap for release window", actor: "ops@acme-corp.io", ip: "10.0.1.12", diff: ""},
-		{offset: 90 * time.Minute, action: "config.override.clear", summary: "Clear override clients[0].bandwidthLimit.upload", actor: "ops@acme-corp.io", ip: "10.0.1.12", diff: ""},
 		{offset: 45 * time.Minute, action: "config.validate", summary: "Manual validation before change window", actor: "platform@acme-corp.io", ip: "10.0.2.8", diff: ""},
 	}
 

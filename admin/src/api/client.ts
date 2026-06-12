@@ -17,6 +17,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body.data as T
 }
 
+export type AdminStatusData = {
+  enabled: boolean
+  listen?: string
+  uiBasePath?: string
+  databasePath?: string
+  snapshotInterval?: string
+  pidFile?: string
+}
+
 export type StatusData = {
   version: string
   configPath: string
@@ -25,6 +34,7 @@ export type StatusData = {
   httpPort: number
   tcpPort: number
   sessionCount: number
+  admin?: AdminStatusData
 }
 
 export type OverviewData = {
@@ -192,19 +202,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ summary: summary ?? '' }),
     }),
-  listOverrides: () =>
-    request<{ entries: { path: string; value: unknown }[]; size: number }>('/overrides'),
-  setOverride: (path: string, value: unknown) =>
-    request<{ ok: boolean; size: number }>('/overrides', {
-      method: 'PUT',
-      body: JSON.stringify({ path, value }),
-    }),
-  deleteOverride: (path: string) =>
-    request<{ ok: boolean; size: number }>(`/overrides/${encodeURIComponent(path)}`, {
-      method: 'DELETE',
-    }),
-  clearAllOverrides: () =>
-    request<{ ok: boolean; size: number }>('/overrides/clear-all', { method: 'DELETE' }),
   reload: () =>
     request<{ reloaded: boolean }>('/reload', { method: 'POST' }),
   audit: (limit = 50) => request<AuditRow[]>(`/audit?limit=${limit}`),
