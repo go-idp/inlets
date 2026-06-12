@@ -1,4 +1,4 @@
 package inlets
 
 // Version is the version of lighthouse
-var Version = "1.29.3"
+var Version = "1.29.4"
